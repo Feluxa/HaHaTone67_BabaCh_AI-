@@ -1,65 +1,96 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { AppShell, Burger, Group, Skeleton, Title, Text, Button, Paper, ScrollArea, Badge } from '@mantine/core';
+import { useDisclosure } from '@mantine/hooks';
+import { IconRobot, IconPlayerPlay } from '@tabler/icons-react';
+
+export default function AgentDashboard() {
+  const [opened, { toggle }] = useDisclosure();
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    <AppShell
+      header={{ height: 60 }}
+      navbar={{ width: 300, breakpoint: 'sm', collapsed: { mobile: !opened } }}
+      padding="md"
+    >
+      {/* Шапка */}
+      <AppShell.Header>
+        <Group h="100%" px="md" justify="space-between">
+          <Group>
+            <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
+            <IconRobot size={30} color="#228be6" />
+            <Title order={3}>GigaAgent Terminal</Title>
+          </Group>
+          <Badge color="green" variant="light">Система готова</Badge>
+        </Group>
+      </AppShell.Header>
+
+      {/* Боковое меню со списком кейсов */}
+      <AppShell.Navbar p="md">
+        <Text fw={700} mb="sm">Доступные кейсы</Text>
+        <Group align="center" mb="sm">
+            <Button variant="light" fullWidth justify="flex-start">
+              case_01_subscription
+            </Button>
+            <Button variant="subtle" color="gray" fullWidth justify="flex-start">
+              case_02_fraud_alert
+            </Button>
+            <Button variant="subtle" color="gray" fullWidth justify="flex-start">
+              case_09_locked (Secret)
+            </Button>
+        </Group>
+        
+        <Button 
+          mt="auto" 
+          color="teal" 
+          leftSection={<IconPlayerPlay size={16} />}
+        >
+          Создать новый Run
+        </Button>
+      </AppShell.Navbar>
+
+      {/* Главная рабочая область */}
+      <AppShell.Main>
+        <Group align="flex-start" grow>
+          
+          {/* Левая колонка: Вводные данные */}
+          <Paper shadow="xs" p="md" withBorder>
+            <Title order={4} mb="md">Вводные данные (Ticket)</Title>
+            <Text fw={500} c="dimmed" size="sm">Пользователь:</Text>
+            <Text mb="sm">user_id=402</Text>
+            
+            <Text fw={500} c="dimmed" size="sm">Сообщение:</Text>
+            <Text fs="italic">«У меня дважды списали $10 за премиум-подписку, помогите!»</Text>
+            
+            <Skeleton height={8} mt="xl" radius="xl" />
+            <Skeleton height={8} mt="md" radius="xl" />
+            <Skeleton height={8} mt="md" width="70%" radius="xl" />
+          </Paper>
+
+          {/* Правая колонка: Терминал мыслей агента */}
+          <Paper shadow="xs" p="md" bg="dark.7" c="gray.1" withBorder>
+            <Title order={4} mb="md" c="white">ReAct Logs / Действия Агента</Title>
+            <ScrollArea h={400} type="always" offsetScrollbars>
+              <Text size="sm" ff="monospace" c="green.4">
+                [SYSTEM] Запуск расследования. Run_ID: run_abc123
+              </Text>
+              <Text size="sm" ff="monospace" mt="xs">
+                {'>'} GET /support/tickets/tic_7hx2kq/messages
+              </Text>
+              <Text size="sm" ff="monospace" mt="xs" c="yellow.4">
+                [THOUGHT] Клиент жалуется на двойное списание. Нужно проверить транзакции.
+              </Text>
+              <Text size="sm" ff="monospace" mt="xs">
+                {'>'} GET /transactions?user_id=402
+              </Text>
+              <Text size="sm" ff="monospace" mt="xs" c="blue.3">
+                [ACTION] Найдено два списания. Выполняю refund_transaction(id=tx_993)
+              </Text>
+            </ScrollArea>
+          </Paper>
+
+        </Group>
+      </AppShell.Main>
+    </AppShell>
   );
 }
