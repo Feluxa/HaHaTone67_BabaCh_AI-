@@ -359,7 +359,7 @@ export const LlmDecisionSchema = z.discriminatedUnion("nextStep", [
     nextStep: z.literal("tool_call"),
     thoughtSummary: z.string().min(10).max(1000),
     toolName: z.string().min(1),
-    toolArgs: z.record(z.unknown()),
+    toolArgs: z.record(z.string(), z.unknown()),
     reason: z.string().min(10).max(1000),
     riskLevel: z.enum(["low", "medium", "high"]),
   }),
@@ -381,6 +381,8 @@ export const LlmDecisionSchema = z.discriminatedUnion("nextStep", [
 
 export type LlmDecision = z.infer<typeof LlmDecisionSchema>;
 ```
+
+> **Примечание (Zod v4):** В проекте используется Zod **v4.4.3**, в котором `z.record()` требует явный тип ключа. `z.record(z.string(), z.unknown())` — это эквивалент `z.record(z.unknown())` из Zod v3; результирующий TypeScript-тип `Record<string, unknown>` идентичен.
 
 ### 9.2. Безопасный парсинг ответа LLM
 
@@ -419,6 +421,8 @@ export type RefundTransactionArgs = z.infer<
   typeof RefundTransactionArgsSchema
 >;
 ```
+
+> **Примечание:** Схема определена в `src/llm/outputSchemas.ts` как единственный источник истины — она валидирует аргументы, которые предлагает LLM. В `src/tools/toolSchemas.ts` находится реэкспорт (`export { RefundTransactionArgsSchema, type RefundTransactionArgs } from "../llm/outputSchemas"`) для обратной совместимости всех существующих импортов.
 
 ### 9.4. Пример Tool Definition
 
@@ -562,19 +566,22 @@ export function canRefundTransaction(input: RefundPolicyInput): PolicyDecision {
     };
   }
 
-  if (transaction.status !== "completed") {
-    return {
-      allowed: false,
-      code: "INVALID_TRANSACTION_STATE",
-      reason: "Only completed transactions can be refunded.",
-    };
-  }
-
+  // Порядок намеренный: alreadyRefunded проверяется до TypeScript-сужения типа status.
+  // Если поставить проверку status !== "completed" первой, компилятор сузит тип status
+  // до "completed" в следующей ветке, и status === "refunded" станет недостижимым.
   if (transaction.alreadyRefunded || transaction.status === "refunded") {
     return {
       allowed: false,
       code: "DUPLICATE_ACTION",
       reason: "Transaction has already been refunded.",
+    };
+  }
+
+  if (transaction.status !== "completed") {
+    return {
+      allowed: false,
+      code: "INVALID_TRANSACTION_STATE",
+      reason: "Only completed transactions can be refunded.",
     };
   }
 
@@ -696,6 +703,27 @@ export async function checkPolicyGuard<TArgs>(
   };
 }
 ```
+
+---
+
+## 12.1. Реализованные компоненты
+
+Таблица отражает текущее состояние реализации относительно спецификации.
+
+| Файл | Статус | Примечание |
+|---|---|---|
+| `src/agent/agentState.ts` | ✅ реализован | Zod-схемы (`AgentStateSchema`, `AgentActionSchema`, `AgentObservationSchema`), типы через `z.infer<>`, фабрика `createInitialAgentState` |
+| `src/agent/orchestrator.ts` | ✅ реализован | Детерминированный mock-пайплайн (без LLM), Policy Guard интегрирован, страховочная сетка `buildFallbackAnswer` |
+| `src/agent/finalizer.ts` | ✅ реализован | `buildFallbackAnswer` — 4 ветки логики, русская морфология числительных, все ветки ≥ 20 символов |
+| `src/policy/rules.ts` | ✅ реализован | `canRefundTransaction` по §11, исправленный порядок проверок |
+| `src/policy/policyGuard.ts` | ✅ реализован | Mock transaction store (`MOCK_TRANSACTION_STORE`), логирование всех исходов через `logEvent` |
+| `src/llm/outputSchemas.ts` | ✅ реализован | `LlmDecisionSchema` + `parseLlmDecision` + `RefundTransactionArgsSchema` (единственный источник истины) |
+| `src/llm/systemPrompt.ts` | ✅ реализован | `buildSystemPrompt()` — 5 секций, 9 правил из §14.3, JSON-примеры для всех трёх вариантов ответа |
+| `src/components/AgentTrace.tsx` | ✅ реализован | `"use client"`, discriminated union `TraceState`, inline styles, бейджи по типам наблюдений |
+| `app/api/solve/route.ts` | ✅ реализован | `safeParse` на входе, раздельная семантика 400 (невалидный запрос) и 500 (ошибка агента) |
+| `src/agent/agentLoop.ts` | ⏳ не реализован | Нужен для LLM-режима (ReAct-цикл с реальными вызовами GigaChat) |
+| `src/llm/gigachatClient.ts` | ⏳ не реализован | Подключение GigaChat API |
+| `src/sandbox/*Client.ts` | ⏳ не реализован | Реальные HTTP-вызовы в Bank Support Sandbox |
 
 ---
 

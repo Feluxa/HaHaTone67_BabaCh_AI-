@@ -87,11 +87,23 @@ export function canRefundTransaction(input: RefundPolicyInput): PolicyDecision {
     };
   }
 
-  if (transaction.status !== "completed" || transaction.alreadyRefunded) {
+  // alreadyRefunded проверяется до status-сужения, чтобы флаг срабатывал
+  // независимо от текущего статуса (внешний процесс мог выставить его раньше).
+  // status === "refunded" тоже проверяется здесь — до следующего if, где
+  // TypeScript сузит тип до "completed" и ветка станет недостижимой.
+  if (transaction.alreadyRefunded || transaction.status === "refunded") {
+    return {
+      allowed: false,
+      code: "DUPLICATE_ACTION",
+      reason: "Transaction has already been refunded.",
+    };
+  }
+
+  if (transaction.status !== "completed") {
     return {
       allowed: false,
       code: "INVALID_TRANSACTION_STATE",
-      reason: "Only non-refunded completed transactions can be refunded.",
+      reason: "Only completed transactions can be refunded.",
     };
   }
 

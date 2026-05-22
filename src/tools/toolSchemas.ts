@@ -1,6 +1,14 @@
 import { z } from "zod";
 import type { AgentObservation, AgentState, RiskLevel } from "../agent/agentState";
 
+// RefundTransactionArgsSchema живёт в outputSchemas.ts (§9.3 ARCHITECTURE) —
+// там валидируются все аргументы, которые предлагает LLM.
+// Реэкспортируем для обратной совместимости всех существующих импортов.
+export {
+  RefundTransactionArgsSchema,
+  type RefundTransactionArgs,
+} from "../llm/outputSchemas";
+
 export const GetTicketMessagesArgsSchema = z.object({
   ticketId: z.string().min(1),
 });
@@ -19,17 +27,6 @@ export const GetTransactionsArgsSchema = z.object({
 });
 
 export type GetTransactionsArgs = z.infer<typeof GetTransactionsArgsSchema>;
-
-export const RefundTransactionArgsSchema = z.object({
-  transactionId: z.string().min(1),
-  customerId: z.string().min(1),
-  amount: z.number().positive(),
-  currency: z.string().length(3),
-  reason: z.string().min(10).max(500),
-  idempotencyKey: z.string().min(16),
-});
-
-export type RefundTransactionArgs = z.infer<typeof RefundTransactionArgsSchema>;
 
 export interface ToolDefinition<TArgs> {
   name: string;

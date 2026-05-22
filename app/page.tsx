@@ -3,6 +3,7 @@
 import { AppShell, Burger, Group, Skeleton, Title, Text, Button, Paper, ScrollArea, Badge } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { IconRobot, IconPlayerPlay } from '@tabler/icons-react';
+import { AgentTrace } from '@/src/components/AgentTrace';
 
 export default function AgentDashboard() {
   const [opened, { toggle }] = useDisclosure();
@@ -39,10 +40,10 @@ export default function AgentDashboard() {
               case_09_locked (Secret)
             </Button>
         </Group>
-        
-        <Button 
-          mt="auto" 
-          color="teal" 
+
+        <Button
+          mt="auto"
+          color="teal"
           leftSection={<IconPlayerPlay size={16} />}
         >
           Создать новый Run
@@ -52,40 +53,26 @@ export default function AgentDashboard() {
       {/* Главная рабочая область */}
       <AppShell.Main>
         <Group align="flex-start" grow>
-          
+
           {/* Левая колонка: Вводные данные */}
           <Paper shadow="xs" p="md" withBorder>
             <Title order={4} mb="md">Вводные данные (Ticket)</Title>
             <Text fw={500} c="dimmed" size="sm">Пользователь:</Text>
             <Text mb="sm">user_id=402</Text>
-            
+
             <Text fw={500} c="dimmed" size="sm">Сообщение:</Text>
             <Text fs="italic">«У меня дважды списали $10 за премиум-подписку, помогите!»</Text>
-            
+
             <Skeleton height={8} mt="xl" radius="xl" />
             <Skeleton height={8} mt="md" radius="xl" />
             <Skeleton height={8} mt="md" width="70%" radius="xl" />
           </Paper>
 
-          {/* Правая колонка: Терминал мыслей агента */}
-          <Paper shadow="xs" p="md" bg="dark.7" c="gray.1" withBorder>
-            <Title order={4} mb="md" c="white">ReAct Logs / Действия Агента</Title>
-            <ScrollArea h={400} type="always" offsetScrollbars>
-              <Text size="sm" ff="monospace" c="green.4">
-                [SYSTEM] Запуск расследования. Run_ID: run_abc123
-              </Text>
-              <Text size="sm" ff="monospace" mt="xs">
-                {'>'} GET /support/tickets/tic_7hx2kq/messages
-              </Text>
-              <Text size="sm" ff="monospace" mt="xs" c="yellow.4">
-                [THOUGHT] Клиент жалуется на двойное списание. Нужно проверить транзакции.
-              </Text>
-              <Text size="sm" ff="monospace" mt="xs">
-                {'>'} GET /transactions?user_id=402
-              </Text>
-              <Text size="sm" ff="monospace" mt="xs" c="blue.3">
-                [ACTION] Найдено два списания. Выполняю refund_transaction(id=tx_993)
-              </Text>
+          {/* Правая колонка: Agent Trace */}
+          <Paper shadow="xs" p="md" withBorder>
+            <Title order={4} mb="md">Agent Trace</Title>
+            <ScrollArea h={520} type="auto" offsetScrollbars>
+              <AgentTrace />
             </ScrollArea>
           </Paper>
 
