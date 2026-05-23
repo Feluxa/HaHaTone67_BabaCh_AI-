@@ -28,6 +28,34 @@ export const GetTransactionsArgsSchema = z.object({
 
 export type GetTransactionsArgs = z.infer<typeof GetTransactionsArgsSchema>;
 
+/** GET /users/{user_id} — подробная карточка клиента. */
+export const GetUserProfileArgsSchema = z.object({
+  userId: z.string().min(1),
+});
+
+export type GetUserProfileArgs = z.infer<typeof GetUserProfileArgsSchema>;
+
+/** GET /transactions/{transaction_id} — детали конкретной операции. */
+export const GetTransactionByIdArgsSchema = z.object({
+  transactionId: z.string().min(1),
+});
+
+export type GetTransactionByIdArgs = z.infer<typeof GetTransactionByIdArgsSchema>;
+
+/** GET /subscriptions/{subscription_id} — данные конкретной подписки. */
+export const GetSubscriptionByIdArgsSchema = z.object({
+  subscriptionId: z.string().min(1),
+});
+
+export type GetSubscriptionByIdArgs = z.infer<typeof GetSubscriptionByIdArgsSchema>;
+
+/** GET /knowledge-base/search?query={query} — полнотекстовый поиск по базе знаний. */
+export const SearchKnowledgeBaseArgsSchema = z.object({
+  query: z.string().min(1),
+});
+
+export type SearchKnowledgeBaseArgs = z.infer<typeof SearchKnowledgeBaseArgsSchema>;
+
 export interface ToolDefinition<TArgs> {
   name: string;
   description: string;

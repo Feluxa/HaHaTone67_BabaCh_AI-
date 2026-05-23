@@ -9,19 +9,27 @@ import type { AgentAction, AgentObservation, AgentState } from "../agent/agentSt
 
 interface SolveResponse {
   state: AgentState;
+  /** null когда dryRun:true или evaluator не вернул данных. */
+  evaluation: unknown | null;
   metrics: Record<string, unknown>;
-  exportData: null;
+  exportData: unknown | null;
 }
 
 // ─────────────────────────────────────────────────────────────
 // Local state — discriminated union, строгая типизация
+//
+// mode хранится и в loading, и в success, чтобы:
+//  - крутить спиннер только на нажатой кнопке
+//  - показывать секцию evaluation только после реального сабмита
 // ─────────────────────────────────────────────────────────────
+
+type RunMode = "dryRun" | "evaluate";
 
 type TraceState =
   | { status: "idle" }
-  | { status: "loading" }
+  | { status: "loading"; mode: RunMode }
   | { status: "error"; message: string }
-  | { status: "success"; data: SolveResponse };
+  | { status: "success"; data: SolveResponse; mode: RunMode };
 
 // ─────────────────────────────────────────────────────────────
 // Style helpers
@@ -78,7 +86,6 @@ const STATUS_DOT_COLOR: Record<AgentObservation["status"], string> = {
   blocked: "#e67700",
 };
 
-// planned → серый, success → зелёный, failed → красный, blocked → оранжевый
 const ACTION_STATUS_COLORS: Record<AgentAction["status"], { bg: string; fg: string }> = {
   planned: { bg: "#f1f3f5", fg: "#495057" },
   success: { bg: "#d3f9d8", fg: "#2f9e44" },
@@ -159,7 +166,6 @@ function ObservationsPanel({
             border: "1px solid #e9ecef",
           }}
         >
-          {/* Step number badge */}
           <span
             style={{
               minWidth: 22,
@@ -179,7 +185,6 @@ function ObservationsPanel({
           </span>
 
           <div style={{ flex: 1, minWidth: 0 }}>
-            {/* Type badge + status dot */}
             <div
               style={{
                 display: "flex",
@@ -204,7 +209,6 @@ function ObservationsPanel({
               <span style={{ fontSize: 11, color: "#868e96" }}>{obs.status}</span>
             </div>
 
-            {/* Source */}
             <div style={{ fontSize: 12, color: "#495057", marginBottom: 3 }}>
               <span style={{ color: "#adb5bd" }}>source: </span>
               <code
@@ -220,7 +224,6 @@ function ObservationsPanel({
               </code>
             </div>
 
-            {/* Message */}
             {obs.message !== undefined && (
               <p
                 style={{
@@ -265,7 +268,6 @@ function EvidencePanel({
             border: "1px solid #e9ecef",
           }}
         >
-          {/* ID + confidence */}
           <div
             style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}
           >
@@ -284,7 +286,6 @@ function EvidencePanel({
             <span style={confidenceBadge(ev.confidence)}>{ev.confidence}</span>
           </div>
 
-          {/* Source */}
           <div style={{ fontSize: 12, color: "#868e96", marginBottom: 5 }}>
             <span>source: </span>
             <code
@@ -297,7 +298,6 @@ function EvidencePanel({
             </code>
           </div>
 
-          {/* Fact */}
           <p
             style={{
               fontSize: 13,
@@ -314,7 +314,6 @@ function EvidencePanel({
   );
 }
 
-// Карточка одного действия — используется и в planned, и в done.
 function ActionCard({ action }: { action: AgentAction }): React.ReactElement {
   return (
     <div
@@ -325,7 +324,6 @@ function ActionCard({ action }: { action: AgentAction }): React.ReactElement {
         border: "1px solid #e9ecef",
       }}
     >
-      {/* name + status badge */}
       <div
         style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}
       >
@@ -344,7 +342,6 @@ function ActionCard({ action }: { action: AgentAction }): React.ReactElement {
         <span style={actionStatusBadge(action.status)}>{action.status}</span>
       </div>
 
-      {/* targetId */}
       <div style={{ fontSize: 12, color: "#868e96", marginBottom: 5 }}>
         <span>target: </span>
         <code
@@ -357,7 +354,6 @@ function ActionCard({ action }: { action: AgentAction }): React.ReactElement {
         </code>
       </div>
 
-      {/* reason */}
       <p style={{ fontSize: 13, color: "#343a40", margin: 0, lineHeight: 1.5 }}>
         {action.reason}
       </p>
@@ -461,6 +457,49 @@ function MetricsPanel({
   );
 }
 
+/**
+ * Панель результата оценки от evaluator.
+ *
+ * `evaluation` — это `unknown` (sandbox может изменить схему ответа),
+ * поэтому отображаем через JSON.stringify без кастов.
+ */
+function EvaluationPanel({ evaluation }: { evaluation: unknown }): React.ReactElement {
+  if (evaluation === null || evaluation === undefined) {
+    return (
+      <p style={{ color: "#868e96", fontSize: 13, margin: 0 }}>
+        Результат оценки не получен
+      </p>
+    );
+  }
+
+  // Если evaluator вернул объект, красиво форматируем; иначе — строка/число.
+  const rendered =
+    typeof evaluation === "object"
+      ? JSON.stringify(evaluation, null, 2)
+      : String(evaluation);
+
+  return (
+    <pre
+      style={{
+        margin: 0,
+        fontSize: 12,
+        fontFamily: "'Fira Code', 'Cascadia Code', Consolas, monospace",
+        color: "#212529",
+        backgroundColor: "#f8f9fa",
+        border: "1px solid #e9ecef",
+        borderRadius: 6,
+        padding: "12px 14px",
+        overflowX: "auto",
+        whiteSpace: "pre-wrap" as const,
+        wordBreak: "break-word" as const,
+        lineHeight: 1.55,
+      }}
+    >
+      {rendered}
+    </pre>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
 // Main export
 // ─────────────────────────────────────────────────────────────
@@ -468,14 +507,21 @@ function MetricsPanel({
 export function AgentTrace(): React.ReactElement {
   const [trace, setTrace] = useState<TraceState>({ status: "idle" });
 
-  async function handleRunAgent(): Promise<void> {
-    setTrace({ status: "loading" });
+  /**
+   * Единая точка запуска агента.
+   *
+   * dryRun: true  → ▶ Run Agent (dry-run)   — только трейс, без evaluator
+   * dryRun: false → 📤 Submit to Evaluator   — полный запуск + POST /cases/{id}/evaluate
+   */
+  async function handleRunAgent(dryRun: boolean): Promise<void> {
+    const mode: RunMode = dryRun ? "dryRun" : "evaluate";
+    setTrace({ status: "loading", mode });
 
     try {
       const res = await fetch("/api/solve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ caseId: "case_01_subscription_activation", dryRun: true }),
+        body: JSON.stringify({ caseId: "case_01_subscription_activation", dryRun }),
       });
 
       const json: unknown = await res.json();
@@ -492,7 +538,6 @@ export function AgentTrace(): React.ReactElement {
         return;
       }
 
-      // Минимальная runtime-проверка формы ответа перед кастом
       if (typeof json !== "object" || json === null || !("state" in json)) {
         setTrace({
           status: "error",
@@ -501,21 +546,24 @@ export function AgentTrace(): React.ReactElement {
         return;
       }
 
-      setTrace({ status: "success", data: json as SolveResponse });
+      setTrace({ status: "success", data: json as SolveResponse, mode });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Ошибка сети";
       setTrace({ status: "error", message });
     }
   }
 
+  const isLoading = trace.status === "loading";
+
   return (
     <div style={{ fontFamily: "Inter, system-ui, -apple-system, sans-serif" }}>
-      {/* ── Кнопка запуска ─────────────────────────────────── */}
-      <div style={{ marginBottom: 20 }}>
+      {/* ── Кнопки запуска ─────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+        {/* Dry-run — только трейс, evaluator не вызывается */}
         <button
           type="button"
-          onClick={handleRunAgent}
-          disabled={trace.status === "loading"}
+          onClick={() => handleRunAgent(true)}
+          disabled={isLoading}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -524,25 +572,62 @@ export function AgentTrace(): React.ReactElement {
             fontSize: 14,
             fontWeight: 600,
             color: "#fff",
-            backgroundColor: trace.status === "loading" ? "#74c0fc" : "#228be6",
+            backgroundColor:
+              isLoading && trace.mode === "dryRun" ? "#74c0fc" : "#228be6",
             border: "none",
             borderRadius: 6,
-            cursor: trace.status === "loading" ? "not-allowed" : "pointer",
+            cursor: isLoading ? "not-allowed" : "pointer",
             transition: "background-color 0.15s ease",
+            opacity: isLoading && trace.mode === "evaluate" ? 0.6 : 1,
           }}
         >
-          {trace.status === "loading" ? "⏳ Запуск..." : "▶ Run Agent (dry-run)"}
+          {isLoading && trace.mode === "dryRun"
+            ? "⏳ Запуск..."
+            : "▶ Run Agent (dry-run)"}
+        </button>
+
+        {/*
+          Submit to Evaluator — dryRun:false.
+          Оркестратор вызовет POST /cases/{caseId}/evaluate через evaluatorClient
+          и вернёт поле evaluation в теле ответа.
+        */}
+        <button
+          type="button"
+          onClick={() => handleRunAgent(false)}
+          disabled={isLoading}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "10px 20px",
+            fontSize: 14,
+            fontWeight: 600,
+            color: "#fff",
+            backgroundColor:
+              isLoading && trace.mode === "evaluate" ? "#63e6be" : "#0ca678",
+            border: "none",
+            borderRadius: 6,
+            cursor: isLoading ? "not-allowed" : "pointer",
+            transition: "background-color 0.15s ease",
+            opacity: isLoading && trace.mode === "dryRun" ? 0.6 : 1,
+          }}
+        >
+          {isLoading && trace.mode === "evaluate"
+            ? "⏳ Отправка..."
+            : "📤 Submit to Evaluator"}
         </button>
       </div>
 
-      {/* ── Loading ─────────────────────────────────────────── */}
+      {/* ── Loading ─────────────────────────────────────────────────────────── */}
       {trace.status === "loading" && (
         <p style={{ color: "#868e96", fontSize: 13, margin: 0 }}>
-          Агент расследует кейс, ждём ответа...
+          {trace.mode === "dryRun"
+            ? "Агент расследует кейс, ждём ответа..."
+            : "Агент работает и отправляет решение в evaluator..."}
         </p>
       )}
 
-      {/* ── Error ───────────────────────────────────────────── */}
+      {/* ── Error ───────────────────────────────────────────────────────────── */}
       {trace.status === "error" && (
         <div
           style={{
@@ -559,7 +644,7 @@ export function AgentTrace(): React.ReactElement {
         </div>
       )}
 
-      {/* ── Success / Trace ─────────────────────────────────── */}
+      {/* ── Success / Trace ─────────────────────────────────────────────────── */}
       {trace.status === "success" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
           {/* Run metadata */}
@@ -571,6 +656,21 @@ export function AgentTrace(): React.ReactElement {
             }}
           >
             runId: {trace.data.state.runId} · caseId: {trace.data.state.caseId}
+            {trace.mode === "evaluate" && (
+              <span
+                style={{
+                  marginLeft: 10,
+                  padding: "1px 7px",
+                  borderRadius: 4,
+                  backgroundColor: "#d3f9d8",
+                  color: "#2f9e44",
+                  fontWeight: 700,
+                  fontSize: 10,
+                }}
+              >
+                EVALUATED
+              </span>
+            )}
           </div>
 
           {/* Observations */}
@@ -592,7 +692,8 @@ export function AgentTrace(): React.ReactElement {
           {/* Actions */}
           <section>
             <SectionTitle>
-              Actions (planned: {trace.data.state.actionsPlanned.length} · done: {trace.data.state.actionsDone.length})
+              Actions (planned: {trace.data.state.actionsPlanned.length} · done:{" "}
+              {trace.data.state.actionsDone.length})
             </SectionTitle>
             <ActionsPanel
               actionsPlanned={trace.data.state.actionsPlanned}
@@ -605,6 +706,32 @@ export function AgentTrace(): React.ReactElement {
             <SectionTitle>Metrics</SectionTitle>
             <MetricsPanel metrics={trace.data.metrics} />
           </section>
+
+          {/* Evaluation result — только после реального сабмита */}
+          {trace.mode === "evaluate" && (
+            <section
+              style={{
+                padding: "16px 20px",
+                borderRadius: 8,
+                backgroundColor: "#ebfbee",
+                border: "1px solid #8ce99a",
+              }}
+            >
+              <p
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: "#2f9e44",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.8,
+                  margin: "0 0 10px 0",
+                }}
+              >
+                Результат Evaluator · POST /cases/case_01_subscription_activation/evaluate
+              </p>
+              <EvaluationPanel evaluation={trace.data.evaluation} />
+            </section>
+          )}
 
           {/* Final answer — не трогать */}
           {trace.data.state.answer !== undefined && (
