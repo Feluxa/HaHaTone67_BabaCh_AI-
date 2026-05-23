@@ -9,7 +9,8 @@ export type PolicyBlockCode =
   | "INVALID_TRANSACTION_STATE"
   | "DUPLICATE_ACTION"
   | "MISSING_IDEMPOTENCY_KEY"
-  | "FORBIDDEN_TOOL";
+  | "FORBIDDEN_TOOL"
+  | "POISONED_KB_ARTICLE";
 
 export type PolicyDecision =
   | {

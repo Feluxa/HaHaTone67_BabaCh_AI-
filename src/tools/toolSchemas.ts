@@ -56,6 +56,13 @@ export const SearchKnowledgeBaseArgsSchema = z.object({
 
 export type SearchKnowledgeBaseArgs = z.infer<typeof SearchKnowledgeBaseArgsSchema>;
 
+/** GET /knowledge-base/articles/{article_id} — полный текст статьи по её ID. */
+export const GetKnowledgeBaseArticleArgsSchema = z.object({
+  articleId: z.string().min(1),
+});
+
+export type GetKnowledgeBaseArticleArgs = z.infer<typeof GetKnowledgeBaseArticleArgsSchema>;
+
 export interface ToolDefinition<TArgs> {
   name: string;
   description: string;

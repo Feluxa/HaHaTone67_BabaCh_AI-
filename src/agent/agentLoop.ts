@@ -1,7 +1,7 @@
 import { getNextDecision } from "../llm/gigachatClient";
 import { logEvent } from "../observability/logger";
 import { checkPolicyGuard } from "../policy/policyGuard";
-import { extractEvidenceFromObservation } from "../evidence/evidenceCollector";
+import { extractFromObservation } from "../evidence/evidenceCollector";
 import { toolRegistry } from "../tools/toolRegistry";
 import type { AgentState } from "./agentState";
 import { buildFallbackAnswer } from "./finalizer";
@@ -241,7 +241,24 @@ export async function runAgentLoop(state: AgentState): Promise<void> {
     state.toolHistory.push(toolName);
     state.observations.push(observation);
     updateStateFromObservation(state, observation);
-    extractEvidenceFromObservation({ state, tool, observation });
+
+    // Extract concrete facts from the observation and deduplicate by objectId.
+    // Each objectId may accumulate evidence only once — subsequent tool calls
+    // for the same object (e.g. getTransactionById after getTransactions) are
+    // skipped to preserve the first, often richer, evidence entry.
+    const newEvidence = extractFromObservation({
+      state,
+      tool,
+      args: validatedArgs,
+      observation,
+    });
+    const existingObjectIds = new Set(state.evidence.map((ev) => ev.objectId));
+    for (const ev of newEvidence) {
+      if (!existingObjectIds.has(ev.objectId)) {
+        state.evidence.push(ev);
+        existingObjectIds.add(ev.objectId);
+      }
+    }
 
     logEvent("info", "tool.observed", {
       runId: state.runId,

@@ -14,6 +14,8 @@ import {
   GetSubscriptionByIdArgsSchema,
   type SearchKnowledgeBaseArgs,
   SearchKnowledgeBaseArgsSchema,
+  type GetKnowledgeBaseArticleArgs,
+  GetKnowledgeBaseArticleArgsSchema,
   type ToolDefinition,
 } from "./toolSchemas";
 
@@ -140,6 +142,12 @@ export const getUserProfileTool: ToolDefinition<GetUserProfileArgs> = {
  *
  * Used to confirm the details of the specific payment linked to the case,
  * e.g. the source_transaction_id from the subscription record.
+ *
+ * ⚠️ Security: only verified, bank-controlled fields are forwarded to the LLM.
+ * Fields `metadata`, `customer_note`, `description`, and `external_reference`
+ * are user-controlled input that may embed prompt injection instructions
+ * (see case_07 security analysis). They are stripped before the observation
+ * is returned so they never reach the agent's reasoning context.
  */
 export const getTransactionByIdTool: ToolDefinition<GetTransactionByIdArgs> = {
   name: "getTransactionById",
@@ -150,16 +158,44 @@ export const getTransactionByIdTool: ToolDefinition<GetTransactionByIdArgs> = {
   requiresPolicyCheck: false,
   inputSchema: GetTransactionByIdArgsSchema,
   async execute(args, state) {
-    const data = await sandboxClient.get(
+    const rawData = await sandboxClient.get(
       `/transactions/${args.transactionId}`,
       { runId: state.runId },
     );
+
+    // Whitelist: only bank-controlled fields reach the LLM context.
+    // metadata, customer_note, description, external_reference — user-controlled
+    // and must never be forwarded.
+    const VERIFIED_FIELDS = [
+      "id",
+      "amount",
+      "currency",
+      "status",
+      "merchant_name",
+      "mcc",
+      "created_at",
+      "direction",
+    ] as const;
+
+    const safeData: Record<string, unknown> = {};
+    if (
+      typeof rawData === "object" &&
+      rawData !== null &&
+      !Array.isArray(rawData)
+    ) {
+      const record = rawData as Record<string, unknown>;
+      for (const key of VERIFIED_FIELDS) {
+        if (key in record) {
+          safeData[key] = record[key];
+        }
+      }
+    }
 
     return {
       type: "transaction_detail",
       source: `GET /transactions/${args.transactionId}`,
       status: "success",
-      data,
+      data: safeData,
     };
   },
 };
@@ -223,6 +259,36 @@ export const searchKnowledgeBaseTool: ToolDefinition<SearchKnowledgeBaseArgs> = 
   },
 };
 
+/**
+ * Fetches the full text of a knowledge-base article (GET /knowledge-base/articles/{article_id}).
+ *
+ * The search tool returns short excerpts and IDs only. The evaluator counts
+ * an article as "opened" (and thus usable as evidence) only when this tool
+ * has been called to retrieve the complete article body.
+ */
+export const getKnowledgeBaseArticleTool: ToolDefinition<GetKnowledgeBaseArticleArgs> = {
+  name: "getKnowledgeBaseArticle",
+  description:
+    "Fetch the full text of a knowledge-base article by its ID via GET /knowledge-base/articles/{article_id}. Must be called after searchKnowledgeBase to open the article and qualify it as evidence.",
+  riskLevel: "low",
+  requiresEvidence: false,
+  requiresPolicyCheck: false,
+  inputSchema: GetKnowledgeBaseArticleArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(
+      `/knowledge-base/articles/${args.articleId}`,
+      { runId: state.runId },
+    );
+
+    return {
+      type: "knowledge_base_article",
+      source: `GET /knowledge-base/articles/${args.articleId}`,
+      status: "success",
+      data,
+    };
+  },
+};
+
 export const investigationTools = [
   getTicketMessagesTool,
   getCustomerProfileTool,
@@ -231,4 +297,5 @@ export const investigationTools = [
   getTransactionByIdTool,
   getSubscriptionByIdTool,
   searchKnowledgeBaseTool,
+  getKnowledgeBaseArticleTool,
 ];

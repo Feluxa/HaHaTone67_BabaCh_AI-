@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import https from "node:https";
 import type { AgentState } from "../agent/agentState";
 import { getEnv } from "../config/env";
+import { logEvent } from "../observability/logger";
 import { toolRegistry } from "../tools/toolRegistry";
 import { buildSystemPrompt } from "./systemPrompt";
 import {
@@ -341,6 +342,15 @@ export async function getNextDecision(state: AgentState): Promise<LlmDecision> {
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const content = await callGigaChat(state);
+
+    // Log the raw GigaChat output before any parsing so misformatted responses
+    // are visible in the trace. preview is capped at 500 chars to avoid flooding logs.
+    logEvent("debug", "llm.raw_response", {
+      runId: state.runId,
+      attempt,
+      preview: content.slice(0, 500),
+      totalLength: content.length,
+    });
 
     try {
       const rawDecision = extractJsonObject(content);
