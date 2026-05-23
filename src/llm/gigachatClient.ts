@@ -28,3 +28,16 @@ export class StubLlmClient implements LlmClient {
 }
 
 export const gigachatClient: LlmClient = new StubLlmClient();
+
+/**
+ * getNextDecision — именованный адаптер для вызова из {@link runAgentLoop}.
+ *
+ * Делегирует вызов к активному LLM-клиенту (сейчас: StubLlmClient).
+ * Когда реальный GigaChat-клиент будет реализован, достаточно заменить
+ * инстанс `gigachatClient` выше — интерфейс вызова в agentLoop не изменится.
+ *
+ * @param state — текущее состояние агента, передаётся в LLM для контекста.
+ */
+export async function getNextDecision(state: AgentState): Promise<LlmDecision> {
+  return gigachatClient.nextDecision(state);
+}
