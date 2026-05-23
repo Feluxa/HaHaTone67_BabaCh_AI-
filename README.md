@@ -82,7 +82,7 @@ GigaChat возвращает только JSON с описанием следу
 src/
 ├── agent/
 │   ├── agentState.ts        # Zod-схемы AgentState, AgentAction, AgentObservation; фабрика
-│   ├── orchestrator.ts      # solveCase() — детерминированный пайплайн (mock, без LLM)
+│   ├── orchestrator.ts      # solveCase() — детерминированный пайплайн через Sandbox, без LLM
 │   ├── agentLoop.ts         # ReAct-цикл с GigaChat (⏳ подключается следующим этапом)
 │   └── finalizer.ts         # buildFallbackAnswer() — 4 ветки, русская морфология
 │
@@ -93,8 +93,8 @@ src/
 │
 ├── policy/
 │   ├── rules.ts             # canRefundTransaction() — бизнес-правила возврата
-│   ├── policyGuard.ts       # checkPolicyGuard() — точка входа, mock transaction store
-│   └── policyEngine.ts      # checkRefundPolicy() — реальный вызов Sandbox (⏳)
+│   ├── policyGuard.ts       # checkPolicyGuard() — точка входа перед high-risk действиями
+│   └── policyEngine.ts      # checkRefundPolicy() — проверка refund по данным Sandbox
 │
 ├── tools/
 │   ├── toolRegistry.ts      # ToolRegistry — whitelist инструментов

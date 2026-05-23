@@ -1,20 +1,31 @@
-import { createHash, randomUUID } from "node:crypto";
-import { EvidenceSchema } from "../evidence/evidenceTypes";
+import { createHash } from "node:crypto";
+import { EvidenceSchema, type Evidence } from "../evidence/evidenceTypes";
 import { logEvent } from "../observability/logger";
 import { checkPolicyGuard } from "../policy/policyGuard";
+import { evaluatorClient } from "../sandbox/evaluatorClient";
+import { casesClient, type SandboxCase } from "../sandbox/casesClient";
+import { runsClient } from "../sandbox/runsClient";
 import { refundTransactionTool } from "../tools/actionTools";
-import { RefundTransactionArgsSchema } from "../tools/toolSchemas";
+import {
+  GetCustomerProfileArgsSchema,
+  GetTicketMessagesArgsSchema,
+  GetTransactionsArgsSchema,
+  RefundTransactionArgsSchema,
+  type ToolDefinition,
+} from "../tools/toolSchemas";
+import {
+  getCustomerProfileTool,
+  getTicketMessagesTool,
+  getTransactionsTool,
+} from "../tools/investigationTools";
 import {
   AgentStateSchema,
   createInitialAgentState,
   type AgentAction,
   type AgentObservation,
+  type AgentState,
 } from "./agentState";
 import { buildFallbackAnswer } from "./finalizer";
-
-// ─────────────────────────────────────────────────────────────
-// Public contract
-// ─────────────────────────────────────────────────────────────
 
 export interface SolveCaseInput {
   caseId: string;
@@ -22,18 +33,31 @@ export interface SolveCaseInput {
   dryRun?: boolean;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────
+export interface SolveCaseResult {
+  state: ReturnType<typeof AgentStateSchema.parse>;
+  evaluation: unknown | null;
+  metrics: Record<string, unknown>;
+  exportData: unknown | null;
+}
 
-/**
- * Генерирует детерминированный идемпотентный ключ для мутирующих операций.
- * Бэкенд ВСЕГДА генерирует ключ сам — LLM его не видит.
- *
- * @param caseId   - идентификатор кейса
- * @param action   - имя действия (например, "refundTransaction")
- * @param targetId - идентификатор объекта действия
- */
+interface TransactionCandidate {
+  id: string;
+  customerId?: string;
+  amount?: number;
+  currency?: string;
+  status?: string;
+  merchant?: string;
+  createdAt?: string;
+  alreadyRefunded?: boolean;
+  raw: Record<string, unknown>;
+}
+
+interface DuplicateFinding {
+  original: TransactionCandidate;
+  duplicate: TransactionCandidate;
+  reason: string;
+}
+
 function buildIdempotencyKey(
   caseId: string,
   action: string,
@@ -42,418 +66,576 @@ function buildIdempotencyKey(
   return createHash("sha256")
     .update(`${caseId}:${action}:${targetId}`)
     .digest("hex")
-    .slice(0, 32); // 32 hex-символа = 128 бит
+    .slice(0, 32);
 }
 
-/**
- * Маскирует ID клиента для безопасного логирования: видны только последние 3 символа.
- * Используется исключительно для PII-безопасного вывода в лог.
- */
-function maskCustomerId(id: string): string {
-  return `***${id.slice(-3)}`;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// ─────────────────────────────────────────────────────────────
-// Mock deterministic flow
-// ─────────────────────────────────────────────────────────────
+function stringField(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
 
-/**
- * solveCase — детерминированный пайплайн расследования без LLM.
- *
- * Симулирует три шага ReAct-цикла:
- *   1. REASON→ACT getTicketMessages  → OBSERVE (сообщения о двойном списании)
- *   2. REASON→ACT getCustomerProfile → OBSERVE (профиль: аккаунт активен)
- *   3. REASON→ACT getTransactions    → OBSERVE (дубликат транзакции через 3 сек)
- *
- * Собирает Evidence, формирует ActionsDone (только при dryRun=false),
- * валидирует итоговый AgentState через Zod перед возвратом.
- *
- * GigaChat НЕ вызывается — подключение LLM будет отдельным этапом.
- */
-export async function solveCase(input: SolveCaseInput): Promise<{
-  state: ReturnType<typeof AgentStateSchema.parse>;
-  metrics: Record<string, unknown>;
-  exportData: null;
-}> {
-  const runId = `run_mock_${randomUUID()}`;
+  return undefined;
+}
+
+function numberField(record: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function booleanField(record: Record<string, unknown>, keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function findFirstString(value: unknown, keys: string[]): string | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findFirstString(item, keys);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const direct = stringField(value, keys);
+  if (direct) {
+    return direct;
+  }
+
+  for (const nested of Object.values(value)) {
+    const found = findFirstString(nested, keys);
+    if (found) {
+      return found;
+    }
+  }
+
+  return undefined;
+}
+
+function collectRecords(value: unknown, output: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectRecords(item, output);
+    }
+    return output;
+  }
+
+  if (!isRecord(value)) {
+    return output;
+  }
+
+  output.push(value);
+  for (const nested of Object.values(value)) {
+    collectRecords(nested, output);
+  }
+
+  return output;
+}
+
+function extractTicketId(caseData: SandboxCase): string | undefined {
+  return findFirstString(caseData, [
+    "intakeTicketId",
+    "intake_ticket_id",
+    "ticketId",
+    "ticket_id",
+    "supportTicketId",
+    "support_ticket_id",
+  ]);
+}
+
+function extractCustomerId(...sources: unknown[]): string | undefined {
+  for (const source of sources) {
+    const customerId = findFirstString(source, [
+      "customerId",
+      "customer_id",
+      "clientId",
+      "client_id",
+      "userId",
+      "user_id",
+    ]);
+
+    if (customerId) {
+      return customerId;
+    }
+  }
+
+  return undefined;
+}
+
+function toTransactionCandidate(record: Record<string, unknown>): TransactionCandidate | null {
+  const id = stringField(record, [
+    "id",
+    "transactionId",
+    "transaction_id",
+    "operationId",
+    "operation_id",
+  ]);
+
+  const amount = numberField(record, ["amount", "sum", "value"]);
+  if (!id || amount === undefined) {
+    return null;
+  }
+
+  return {
+    id,
+    customerId: stringField(record, ["customerId", "customer_id", "clientId", "client_id", "userId", "user_id"]),
+    amount,
+    currency: stringField(record, ["currency", "currencyCode", "currency_code"])?.toUpperCase(),
+    status: stringField(record, ["status", "state"]),
+    merchant: stringField(record, ["merchant", "merchantName", "merchant_name", "description", "title"]),
+    createdAt: stringField(record, ["createdAt", "created_at", "timestamp", "time", "date"]),
+    alreadyRefunded: booleanField(record, ["alreadyRefunded", "already_refunded", "refunded"]),
+    raw: record,
+  };
+}
+
+function extractTransactions(data: unknown): TransactionCandidate[] {
+  const byId = new Map<string, TransactionCandidate>();
+
+  for (const record of collectRecords(data)) {
+    const candidate = toTransactionCandidate(record);
+    if (candidate) {
+      byId.set(candidate.id, candidate);
+    }
+  }
+
+  return Array.from(byId.values());
+}
+
+function parseTime(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function normalizeText(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function findDuplicateTransaction(
+  transactions: TransactionCandidate[],
+): DuplicateFinding | null {
+  const completed = transactions.filter((transaction) => {
+    return normalizeText(transaction.status) === "completed" || !transaction.status;
+  });
+
+  for (let i = 0; i < completed.length; i += 1) {
+    for (let j = i + 1; j < completed.length; j += 1) {
+      const first = completed[i];
+      const second = completed[j];
+      const sameAmount = first.amount === second.amount;
+      const sameCurrency = (first.currency ?? "") === (second.currency ?? "");
+      const sameMerchant =
+        normalizeText(first.merchant) === normalizeText(second.merchant) ||
+        !first.merchant ||
+        !second.merchant;
+
+      if (!sameAmount || !sameCurrency || !sameMerchant) {
+        continue;
+      }
+
+      const firstTime = parseTime(first.createdAt);
+      const secondTime = parseTime(second.createdAt);
+      const secondsBetween =
+        firstTime !== undefined && secondTime !== undefined
+          ? Math.abs(firstTime - secondTime) / 1000
+          : undefined;
+
+      if (secondsBetween !== undefined && secondsBetween > 300) {
+        continue;
+      }
+
+      const [original, duplicate] =
+        firstTime !== undefined &&
+        secondTime !== undefined &&
+        firstTime > secondTime
+          ? [second, first]
+          : [first, second];
+
+      return {
+        original,
+        duplicate,
+        reason:
+          secondsBetween === undefined
+            ? "Found two completed transactions with the same amount, currency and merchant."
+            : `Found two completed transactions with the same amount, currency and merchant within ${Math.round(secondsBetween)} seconds.`,
+      };
+    }
+  }
+
+  return null;
+}
+
+function pushEvidence(state: AgentState, evidence: Omit<Evidence, "id" | "createdAt">): Evidence {
+  const parsed = EvidenceSchema.parse({
+    ...evidence,
+    id: `ev_${state.evidence.length + 1}`,
+    createdAt: new Date().toISOString(),
+  });
+
+  state.evidence.push(parsed);
+  logEvent("info", "evidence.created", {
+    runId: state.runId,
+    evidenceId: parsed.id,
+    source: parsed.source,
+    objectId: parsed.objectId,
+  });
+
+  return parsed;
+}
+
+async function executeTool<TArgs>(
+  state: AgentState,
+  tool: ToolDefinition<TArgs>,
+  args: TArgs,
+): Promise<AgentObservation> {
+  logEvent("info", "tool.called", {
+    runId: state.runId,
+    toolName: tool.name,
+    riskLevel: tool.riskLevel,
+  });
+
+  const observation = await tool.execute(args, state);
+  state.toolHistory.push(tool.name);
+  state.observations.push(observation);
+
+  logEvent("info", "tool.observed", {
+    runId: state.runId,
+    toolName: tool.name,
+    status: observation.status,
+  });
+
+  return observation;
+}
+
+function actionStatusForEvaluate(status: AgentAction["status"]): "success" | "failed" | "blocked" {
+  return status === "planned" ? "blocked" : status;
+}
+
+function buildAnswer(input: {
+  state: AgentState;
+  duplicateFinding: DuplicateFinding | null;
+  policyAllowed: boolean | null;
+  dryRun: boolean;
+}): string {
+  const { state, duplicateFinding, policyAllowed, dryRun } = input;
+
+  if (!duplicateFinding) {
+    return buildFallbackAnswer(state);
+  }
+
+  const amount = duplicateFinding.duplicate.amount;
+  const currency = duplicateFinding.duplicate.currency ?? "";
+
+  if (policyAllowed === false) {
+    return "Мы проверили обращение и нашли признаки повторной операции, но автоматическое действие заблокировано правилами безопасности. Обращение будет передано специалисту.";
+  }
+
+  if (dryRun) {
+    return `Проверка завершена в dry-run режиме: найден возможный дубль операции на ${amount} ${currency}. Действие прошло проверку политики, но реальный возврат не выполнялся.`;
+  }
+
+  return `Мы нашли повторную операцию на ${amount} ${currency} и инициировали возврат. Деньги вернутся после обработки операции банком.`;
+}
+
+async function safeGetMetrics(runId: string): Promise<Record<string, unknown>> {
+  try {
+    const metrics = await runsClient.getMetrics(runId);
+    return isRecord(metrics) ? metrics : { value: metrics };
+  } catch (reason) {
+    const message = reason instanceof Error ? reason.message : "Unknown metrics error";
+    return { unavailable: true, reason: message };
+  }
+}
+
+async function safeGetExport(runId: string): Promise<unknown | null> {
+  try {
+    return await runsClient.getExport(runId);
+  } catch (reason) {
+    logEvent("warn", "export.unavailable", {
+      runId,
+      reason: reason instanceof Error ? reason.message : "Unknown export error",
+    });
+    return null;
+  }
+}
+
+export async function solveCase(input: SolveCaseInput): Promise<SolveCaseResult> {
   const isDryRun = input.dryRun ?? true;
+  const run = await runsClient.createRun();
+  const runId = run.id;
 
-  logEvent("info", "agent.run.start", {
+  logEvent("info", "run.created", {
     runId,
     caseId: input.caseId,
     dryRun: isDryRun,
-    mode: "mock-deterministic",
+    mode: "real-sandbox-deterministic",
   });
-
-  // ── Инициализация состояния ───────────────────────────────
 
   const state = createInitialAgentState({
     runId,
     caseId: input.caseId,
   });
 
-  // Моковые идентификаторы
-  const mockTicketId = `TKT-${input.caseId.toUpperCase()}-001`;
-  const mockCustomerId = "CUST-88271";
-  const txnOriginal = "TXN-441820";
-  const txnDuplicate = "TXN-441821";
+  const caseData = await casesClient.getCase(input.caseId, runId, input.casePassword);
+  state.caseData = caseData;
+  state.ticketId = extractTicketId(caseData);
+  state.customerId = extractCustomerId(caseData);
 
-  // Загрузка фейкового тикета (имитирует casesClient.getCase)
-  state.caseData = {
-    id: input.caseId,
-    intakeTicketId: mockTicketId,
-    customerId: mockCustomerId,
-    subject: "Двойное списание за покупку в магазине",
-    description:
-      "Клиент сообщает о двойном списании 3 500 ₽ за покупку в Перекрёстке 22.05.2026.",
-    status: "open",
-    createdAt: "2026-05-22T14:30:00.000Z",
-  };
-  state.ticketId = mockTicketId;
-  state.customerId = mockCustomerId;
-  state.problemSummary = "Клиент жалуется на двойное списание 3 500 ₽";
+  state.observations.push({
+    type: "case_loaded",
+    source: `GET /cases/${input.caseId}`,
+    status: "success",
+    data: caseData,
+    message: state.ticketId
+      ? `Case loaded. Intake ticket: ${state.ticketId}.`
+      : "Case loaded, but intake ticket id was not found in a known field.",
+  });
 
-  logEvent("info", "agent.ticket.loaded", {
+  logEvent("info", "case.loaded", {
     runId,
-    ticketId: mockTicketId,
-    customerId: maskCustomerId(mockCustomerId),
+    caseId: input.caseId,
+    ticketId: state.ticketId,
+    hasCustomerId: typeof state.customerId === "string",
   });
 
-  // ── Шаг 1: getTicketMessages ──────────────────────────────
-  // REASON: нужно прочитать жалобу клиента дословно.
-  // ACT:    getTicketMessages(ticketId)
-  // OBSERVE: два сообщения; клиент подтверждает двойное списание.
+  let ticketObservation: AgentObservation | undefined;
+  if (state.ticketId) {
+    ticketObservation = await executeTool(
+      state,
+      getTicketMessagesTool,
+      GetTicketMessagesArgsSchema.parse({ ticketId: state.ticketId }),
+    );
+    state.customerId = state.customerId ?? extractCustomerId(ticketObservation.data);
 
-  const obs1: AgentObservation = {
-    type: "tool_result",
-    source: "getTicketMessages",
-    status: "success",
-    data: {
-      ticketId: mockTicketId,
-      messages: [
-        {
-          id: "msg_001",
-          author: "customer",
-          text: "Здравствуйте! С моей карты два раза списали по 3 500 ₽ за одну покупку 22 мая. Прошу вернуть деньги.",
-          createdAt: "2026-05-22T15:00:00.000Z",
-        },
-        {
-          id: "msg_002",
-          author: "bot",
-          text: "Ваше обращение принято. Мы изучим ситуацию.",
-          createdAt: "2026-05-22T15:01:00.000Z",
-        },
-      ],
-    },
-    message: "Загружены 2 сообщения по тикету; клиент явно указывает на двойное списание",
-  };
-
-  state.observations.push(obs1);
-  state.toolHistory.push("getTicketMessages");
-
-  logEvent("info", "agent.step.tool_executed", {
-    runId,
-    step: 1,
-    tool: "getTicketMessages",
-    status: "success",
-  });
-
-  // ── Шаг 2: getCustomerProfile ─────────────────────────────
-  // REASON: проверить статус аккаунта перед действиями.
-  // ACT:    getCustomerProfile(customerId)
-  // OBSERVE: аккаунт активен, tier=standard; нет блокировок.
-
-  const obs2: AgentObservation = {
-    type: "tool_result",
-    source: "getCustomerProfile",
-    status: "success",
-    data: {
-      customerId: maskCustomerId(mockCustomerId), // PII-masked в payload
-      tier: "standard",
-      accountStatus: "active",
-      registeredAt: "2021-03-15T00:00:00.000Z",
-    },
-    message: "Профиль получен: аккаунт активен, ограничений нет",
-  };
-
-  state.observations.push(obs2);
-  state.toolHistory.push("getCustomerProfile");
-
-  logEvent("info", "agent.step.tool_executed", {
-    runId,
-    step: 2,
-    tool: "getCustomerProfile",
-    status: "success",
-  });
-
-  // ── Шаг 3: getTransactions ────────────────────────────────
-  // REASON: найти транзакции на дату обращения и проверить дубликат.
-  // ACT:    getTransactions(customerId, limit=10)
-  // OBSERVE: TXN-441821 создан через 3 сек после TXN-441820 — дубликат.
-
-  const obs3: AgentObservation = {
-    type: "tool_result",
-    source: "getTransactions",
-    status: "success",
-    data: {
-      customerId: maskCustomerId(mockCustomerId),
-      transactions: [
-        {
-          id: txnOriginal,
-          merchant: "Перекрёсток",
-          amount: 3500,
-          currency: "RUB",
-          status: "completed",
-          createdAt: "2026-05-22T12:44:00.000Z",
-        },
-        {
-          id: txnDuplicate,
-          merchant: "Перекрёсток",
-          amount: 3500,
-          currency: "RUB",
-          status: "completed",
-          createdAt: "2026-05-22T12:44:03.000Z", // 3 секунды разницы
-        },
-        {
-          id: "TXN-441000",
-          merchant: "Яндекс.Такси",
-          amount: 450,
-          currency: "RUB",
-          status: "completed",
-          createdAt: "2026-05-21T19:20:00.000Z",
-        },
-      ],
-    },
-    message:
-      `Две транзакции на 3 500 RUB в Перекрёстке с разницей 3 сек — ` +
-      `классический паттерн дублирования платежа. Дубликат: ${txnDuplicate}`,
-  };
-
-  state.observations.push(obs3);
-  state.toolHistory.push("getTransactions");
-
-  logEvent("info", "agent.step.tool_executed", {
-    runId,
-    step: 3,
-    tool: "getTransactions",
-    status: "success",
-    duplicateFound: true,
-    duplicateTxnId: txnDuplicate,
-  });
-
-  // ── Сбор доказательств (Evidence-First) ───────────────────
-
-  const now = new Date().toISOString();
-
-  const ev1Result = EvidenceSchema.safeParse({
-    id: "ev_1",
-    source: "getTicketMessages",
-    objectId: mockTicketId,
-    // Явно упоминаем ID обеих транзакций, чтобы relevantEvidence-фильтр
-    // в canRefundTransaction считал этот evidence относящимся к TXN-441821.
-    fact: `Клиент письменно подтвердил двойное списание 3 500 ₽ (${txnOriginal} и ${txnDuplicate}) за покупку 22.05.2026 в Перекрёстке.`,
-    supports: `Обосновывает необходимость возврата ${txnDuplicate} как дублирующей транзакции`,
-    confidence: "high",
-    createdAt: now,
-  });
-
-  if (!ev1Result.success) {
-    logEvent("error", "agent.evidence.invalid", {
-      runId,
-      evidenceId: "ev_1",
-      errors: ev1Result.error.issues,
+    pushEvidence(state, {
+      source: ticketObservation.source,
+      objectId: state.ticketId,
+      fact: `Support ticket ${state.ticketId} was loaded from the sandbox for this investigation.`,
+      supports: `case:${input.caseId}`,
+      confidence: "medium",
     });
-    throw new Error(`Evidence ev_1 validation failed: ${ev1Result.error.message}`);
   }
-  state.evidence.push(ev1Result.data);
 
-  const ev2Result = EvidenceSchema.safeParse({
-    id: "ev_2",
-    source: "getTransactions",
-    objectId: txnDuplicate,
-    fact:
-      `Транзакция ${txnDuplicate} на 3 500 RUB (Перекрёсток) создана через 3 секунды ` +
-      `после ${txnOriginal} той же суммы — паттерн дублирования подтверждён.`,
-    supports: "Идентифицирует конкретную транзакцию для возврата",
-    confidence: "high",
-    createdAt: now,
-  });
+  if (!state.customerId) {
+    state.currentHypothesis = "Customer id was not found in the case or ticket payload.";
+    state.answer = buildFallbackAnswer(state);
+    state.isFinished = true;
 
-  if (!ev2Result.success) {
-    logEvent("error", "agent.evidence.invalid", {
-      runId,
-      evidenceId: "ev_2",
-      errors: ev2Result.error.issues,
-    });
-    throw new Error(`Evidence ev_2 validation failed: ${ev2Result.error.message}`);
+    const stateResult = AgentStateSchema.parse(state);
+    return {
+      state: stateResult,
+      evaluation: null,
+      metrics: await safeGetMetrics(runId),
+      exportData: await safeGetExport(runId),
+    };
   }
-  state.evidence.push(ev2Result.data);
 
-  logEvent("info", "agent.evidence.collected", {
-    runId,
-    evidenceCount: state.evidence.length,
-    evidenceIds: state.evidence.map((e) => e.id),
-  });
-
-  // ── Policy Guard + планирование / исполнение действия ────
-  // Все High-risk действия проходят через checkPolicyGuard до помещения
-  // в actionsPlanned или actionsDone.
-
-  const idempotencyKey = buildIdempotencyKey(
-    input.caseId,
-    "refundTransaction",
-    txnDuplicate,
+  const profileObservation = await executeTool(
+    state,
+    getCustomerProfileTool,
+    GetCustomerProfileArgsSchema.parse({ customerId: state.customerId }),
   );
 
-  // Формируем аргументы возврата и валидируем через Zod — строго по архитектуре.
-  const refundArgs = RefundTransactionArgsSchema.parse({
-    transactionId: txnDuplicate,
-    customerId: mockCustomerId,
-    amount: 3500,
-    currency: "RUB",
-    reason:
-      `Дублирующая транзакция: ${txnDuplicate} создана через 3 секунды после ` +
-      `${txnOriginal} с той же суммой и мерчантом. Возврат подтверждён доказательствами.`,
-    idempotencyKey,
+  pushEvidence(state, {
+    source: profileObservation.source,
+    objectId: state.customerId,
+    fact: `Customer profile ${state.customerId} was loaded and linked to the case investigation.`,
+    supports: `customer:${state.customerId}`,
+    confidence: "medium",
   });
 
-  // Cast необходим: PolicyGuardInput.tool типизирован как ToolDefinition<unknown>
-  // (contravariant по args), а refundTransactionTool — ToolDefinition<RefundTransactionArgs>.
-  // Внутри checkPolicyGuard args парсится через RefundTransactionArgsSchema.parse(),
-  // поэтому runtime-безопасность гарантирована Zod.
-  const guardResult = await checkPolicyGuard({
-    tool: refundTransactionTool as import("../tools/toolSchemas").ToolDefinition<unknown>,
-    args: refundArgs,
+  const transactionsObservation = await executeTool(
     state,
+    getTransactionsTool,
+    GetTransactionsArgsSchema.parse({
+      customerId: state.customerId,
+      limit: 50,
+    }),
+  );
+
+  const transactions = extractTransactions(transactionsObservation.data);
+  const duplicateFinding = findDuplicateTransaction(transactions);
+
+  state.observations.push({
+    type: "analysis_result",
+    source: "deterministicDuplicateDetector",
+    status: duplicateFinding ? "success" : "blocked",
+    data: {
+      transactionsScanned: transactions.length,
+      duplicate: duplicateFinding,
+    },
+    message: duplicateFinding
+      ? duplicateFinding.reason
+      : "No duplicate transaction pattern was found by deterministic rules.",
   });
 
-  if (guardResult.allowed) {
-    const policyObs: AgentObservation = {
-      type: "policy_allowed",
+  if (duplicateFinding) {
+    state.currentHypothesis = duplicateFinding.reason;
+    const duplicate = duplicateFinding.duplicate;
+    const original = duplicateFinding.original;
+
+    pushEvidence(state, {
+      source: transactionsObservation.source,
+      objectId: duplicate.id,
+      fact: `Transaction ${duplicate.id} has the same amount, currency and merchant as ${original.id}.`,
+      supports: `refundTransaction:${duplicate.id}`,
+      confidence: "high",
+    });
+
+    pushEvidence(state, {
+      source: "deterministicDuplicateDetector",
+      objectId: duplicate.id,
+      fact: `${duplicateFinding.reason} Candidate duplicate transaction is ${duplicate.id}.`,
+      supports: `refundTransaction:${duplicate.id}`,
+      confidence: "high",
+    });
+
+    const idempotencyKey = buildIdempotencyKey(
+      input.caseId,
+      "refundTransaction",
+      duplicate.id,
+    );
+
+    const refundArgs = RefundTransactionArgsSchema.parse({
+      transactionId: duplicate.id,
+      customerId: duplicate.customerId ?? state.customerId,
+      amount: duplicate.amount,
+      currency: duplicate.currency ?? "RUB",
+      reason: `Duplicate transaction ${duplicate.id} matched original ${original.id} by amount, currency and merchant.`,
+      idempotencyKey,
+    });
+
+    const guardResult = await checkPolicyGuard({
+      tool: refundTransactionTool as ToolDefinition<unknown>,
+      args: refundArgs,
+      state,
+    });
+
+    state.observations.push({
+      type: guardResult.allowed ? "policy_allowed" : "policy_blocked",
       source: "policyGuard",
-      status: "success",
-      data: { tool: "refundTransaction", targetId: txnDuplicate },
+      status: guardResult.allowed ? "success" : "blocked",
+      data: {
+        tool: "refundTransaction",
+        targetId: duplicate.id,
+        ...(!guardResult.allowed && { code: guardResult.code }),
+      },
       message: guardResult.reason,
-    };
-    state.observations.push(policyObs);
+    });
 
     const plannedAction: AgentAction = {
       name: "refundTransaction",
-      targetId: txnDuplicate,
+      targetId: duplicate.id,
       status: "planned",
       reason: refundArgs.reason,
       idempotencyKey,
     };
     state.actionsPlanned.push(plannedAction);
 
-    if (!isDryRun) {
-      // В боевом режиме здесь был бы вызов refundTransactionTool.execute().
-      // Mock-этап: фиксируем исполнение детерминированно.
-      const executedAction: AgentAction = { ...plannedAction, status: "success" };
-      state.actionsDone.push(executedAction);
-      logEvent("info", "agent.action.executed", {
-        runId,
-        action: "refundTransaction",
-        targetId: txnDuplicate,
-        idempotencyKey,
-      });
-    } else {
-      logEvent("info", "agent.action.dry_run_skipped", {
-        runId,
-        action: "refundTransaction",
-        targetId: txnDuplicate,
-      });
+    if (guardResult.allowed && !isDryRun) {
+      const observation = await refundTransactionTool.execute(refundArgs, state);
+      state.observations.push(observation);
     }
-  } else {
-    // Политика заблокировала действие — записываем в blockedActions и observations.
-    state.blockedActions.push({
-      toolName: "refundTransaction",
-      targetId: txnDuplicate,
-      guardResult,
+
+    state.answer = buildAnswer({
+      state,
+      duplicateFinding,
+      policyAllowed: guardResult.allowed,
+      dryRun: isDryRun,
     });
-
-    const blockedObs: AgentObservation = {
-      type: "policy_blocked",
-      source: "policyGuard",
-      status: "blocked",
-      data: { tool: "refundTransaction", targetId: txnDuplicate, code: guardResult.code },
-      message: guardResult.reason,
-    };
-    state.observations.push(blockedObs);
-
-    logEvent("warn", "agent.action.blocked", {
-      runId,
-      action: "refundTransaction",
-      targetId: txnDuplicate,
-      code: guardResult.code,
-      reason: guardResult.reason,
-    });
-  }
-
-  // ── Финальный ответ ───────────────────────────────────────
-
-  state.currentHypothesis = "Двойное списание подтверждено — требуется возврат дубликата";
-
-  if (!guardResult.allowed) {
-    state.answer =
-      `Расследование завершено, однако возврат заблокирован политикой: ${guardResult.reason}`;
-  } else if (isDryRun) {
-    state.answer =
-      `[DRY-RUN] Анализ завершён. Дубликат ${txnDuplicate} (3 500 ₽) выявлен и одобрен ` +
-      `Policy Guard. Собрано ${state.evidence.length} ед. доказательств. ` +
-      `Для реального возврата передайте dryRun=false.`;
   } else {
-    state.answer =
-      `Возврат по дублирующей транзакции ${txnDuplicate} (3 500 ₽) успешно инициирован.`;
+    state.currentHypothesis = "No duplicate transaction was found by deterministic analysis.";
+    state.answer = buildAnswer({
+      state,
+      duplicateFinding,
+      policyAllowed: null,
+      dryRun: isDryRun,
+    });
   }
 
   state.isFinished = true;
+  const stateResult = AgentStateSchema.parse(state);
 
-  // ── Страховочная сетка: если по какой-то причине isFinished
-  // всё ещё false (например, при будущем рефакторинге потока) —
-  // выставляем человекочитаемый fallback перед Zod-валидацией.
-  if (!state.isFinished) {
-    state.answer = buildFallbackAnswer(state);
-    state.isFinished = true;
-    logEvent("warn", "agent.run.fallback_answer", {
+  let evaluation: unknown | null = null;
+  if (!isDryRun && stateResult.evidence.length > 0) {
+    evaluation = await evaluatorClient.evaluateCase(input.caseId, {
+      run_id: stateResult.runId,
+      answer: stateResult.answer ?? buildFallbackAnswer(stateResult),
+      evidence: stateResult.evidence,
+      actions: stateResult.actionsDone.map((action) => ({
+        name: action.name,
+        target: action.targetId,
+        status: actionStatusForEvaluate(action.status),
+        reason: action.reason,
+      })),
+    });
+
+    logEvent("info", "evaluate.submitted", {
       runId,
-      reason: "isFinished was false before Zod validation",
-      evidenceCount: state.evidence.length,
-      hasHypothesis: typeof state.currentHypothesis === "string",
+      caseId: input.caseId,
     });
   }
 
-  // ── Финальная валидация AgentState через Zod ──────────────
-
-  const stateResult = AgentStateSchema.safeParse(state);
-  if (!stateResult.success) {
-    logEvent("error", "agent.state.invalid", {
-      runId,
-      errors: stateResult.error.issues,
-    });
-    throw new Error(`AgentState validation failed: ${stateResult.error.message}`);
-  }
+  const [metrics, exportData] = await Promise.all([
+    safeGetMetrics(runId),
+    safeGetExport(runId),
+  ]);
 
   logEvent("info", "agent.run.complete", {
     runId,
     caseId: input.caseId,
-    steps: state.observations.length,
-    evidenceCount: state.evidence.length,
-    actionsDone: state.actionsDone.length,
+    steps: stateResult.observations.length,
+    evidenceCount: stateResult.evidence.length,
+    actionsPlanned: stateResult.actionsPlanned.length,
+    actionsDone: stateResult.actionsDone.length,
     dryRun: isDryRun,
   });
 
   return {
-    state: stateResult.data,
+    state: stateResult,
+    evaluation,
     metrics: {
-      runId,
-      steps: state.observations.length,
-      evidenceCollected: state.evidence.length,
-      actionsPlanned: state.actionsPlanned.length,
-      actionsDone: state.actionsDone.length,
-      dryRun: isDryRun,
-      mode: "mock-deterministic",
+      ...metrics,
+      localMode: "real-sandbox-deterministic",
+      localDryRun: isDryRun,
+      localEvidenceCollected: stateResult.evidence.length,
+      localActionsPlanned: stateResult.actionsPlanned.length,
+      localActionsDone: stateResult.actionsDone.length,
     },
-    exportData: null,
+    exportData,
   };
 }

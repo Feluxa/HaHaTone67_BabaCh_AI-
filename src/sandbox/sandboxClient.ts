@@ -44,19 +44,38 @@ export class SandboxClient {
       headers["X-Case-Password"] = options.casePassword;
     }
 
-    const response = await fetch(new URL(path, this.baseUrl), {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      cache: "no-store",
-    });
+    const url = new URL(path, this.baseUrl);
+    let response: Response;
+
+    try {
+      response = await fetch(url, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        cache: "no-store",
+      });
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Unknown network error";
+      throw new Error(
+        `Sandbox ${method} ${url.toString()} failed before response: ${message}. Check that SANDBOX_URL is correct and the sandbox container is running.`,
+      );
+    }
 
     if (!response.ok) {
       const message = await response.text();
       throw new Error(`Sandbox ${method} ${path} failed: ${response.status} ${message}`);
     }
 
-    return response.json() as Promise<T>;
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    const text = await response.text();
+    if (text.trim().length === 0) {
+      return undefined as T;
+    }
+
+    return JSON.parse(text) as T;
   }
 }
 

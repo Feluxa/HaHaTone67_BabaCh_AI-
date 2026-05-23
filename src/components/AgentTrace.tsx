@@ -475,7 +475,7 @@ export function AgentTrace(): React.ReactElement {
       const res = await fetch("/api/solve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ caseId: "case_01", dryRun: true }),
+        body: JSON.stringify({ caseId: "case_01_subscription_activation", dryRun: true }),
       });
 
       const json: unknown = await res.json();

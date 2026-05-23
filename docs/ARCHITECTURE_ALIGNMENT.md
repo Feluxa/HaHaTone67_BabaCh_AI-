@@ -10,15 +10,15 @@ The original architecture describes a standalone Node.js service. For the curren
 | Architecture document | Repository location | Current status |
 | --- | --- | --- |
 | Agent Loop | `src/agent/agentLoop.ts` | Scaffolded |
-| Orchestrator | `src/agent/orchestrator.ts` | Scaffolded |
+| Orchestrator | `src/agent/orchestrator.ts` | Real sandbox deterministic flow without LLM |
 | Agent State | `src/agent/agentState.ts` | Scaffolded |
 | LLM Client | `src/llm/gigachatClient.ts` | Stubbed |
 | LLM Output Schemas | `src/llm/outputSchemas.ts` | Scaffolded |
 | Tool Registry | `src/tools/toolRegistry.ts` | Scaffolded |
 | Investigation Tools | `src/tools/investigationTools.ts` | Initial tools |
 | Action Tools | `src/tools/actionTools.ts` | Initial refund tool |
-| Policy Guard | `src/policy/policyGuard.ts` | Scaffolded |
-| Policy Engine | `src/policy/policyEngine.ts` | Refund policy only |
+| Policy Guard | `src/policy/policyGuard.ts` | Uses real policy engine for refund |
+| Policy Engine | `src/policy/policyEngine.ts` | Refund policy against sandbox transaction snapshot |
 | Evidence | `src/evidence/*` | Basic model and extractor |
 | Sandbox API | `src/sandbox/*` | Fetch-based clients |
 | Observability | `src/observability/*` | Console trace scaffold |
