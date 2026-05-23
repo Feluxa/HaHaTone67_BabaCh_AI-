@@ -1,9 +1,68 @@
 import { getNextDecision } from "../llm/gigachatClient";
 import { logEvent } from "../observability/logger";
 import { checkPolicyGuard } from "../policy/policyGuard";
+import { extractEvidenceFromObservation } from "../evidence/evidenceCollector";
 import { toolRegistry } from "../tools/toolRegistry";
 import type { AgentState } from "./agentState";
 import { buildFallbackAnswer } from "./finalizer";
+
+function stringField(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function findFirstString(value: unknown, keys: string[]): string | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findFirstString(item, keys);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const direct = stringField(record, keys);
+  if (direct) return direct;
+
+  for (const nested of Object.values(record)) {
+    const found = findFirstString(nested, keys);
+    if (found) return found;
+  }
+
+  return undefined;
+}
+
+function updateStateFromObservation(state: AgentState, observation: { data?: unknown }): void {
+  state.customerId =
+    state.customerId ??
+    findFirstString(observation.data, [
+      "user_id",
+      "userId",
+      "customer_id",
+      "customerId",
+      "client_id",
+      "clientId",
+    ]);
+
+  state.ticketId =
+    state.ticketId ??
+    findFirstString(observation.data, [
+      "ticket_id",
+      "ticketId",
+      "support_ticket_id",
+      "supportTicketId",
+    ]);
+}
 
 /**
  * runAgentLoop — основной ReAct-цикл агента (§6 ARCHITECTURE).
@@ -139,6 +198,36 @@ export async function runAgentLoop(state: AgentState): Promise<void> {
     // ── Act §4: Execute — инструмент вызывает реальный sandbox-эндпоинт ───
     //
     // Прямые HTTP-вызовы к sandbox запрещены здесь; только через tool.execute.
+    if (state.dryRun && tool.riskLevel === "high") {
+      const targetId =
+        typeof validatedArgs === "object" && validatedArgs !== null
+          ? stringField(validatedArgs as Record<string, unknown>, [
+              "transactionId",
+              "subscriptionId",
+              "customerId",
+              "userId",
+              "ticketId",
+            ]) ?? toolName
+          : toolName;
+
+      state.actionsPlanned.push({
+        name: toolName,
+        targetId,
+        status: "planned",
+        reason: decision.reason,
+      });
+
+      state.observations.push({
+        type: "action_planned",
+        source: toolName,
+        status: "blocked",
+        data: { toolName, toolArgs: validatedArgs },
+        message: "Dry run mode: high-risk action was planned but not executed.",
+      });
+
+      continue;
+    }
+
     logEvent("info", "tool.called", {
       runId: state.runId,
       step,
@@ -151,6 +240,8 @@ export async function runAgentLoop(state: AgentState): Promise<void> {
     // ── Observe: сохранить результат в истории ────────────────────────────
     state.toolHistory.push(toolName);
     state.observations.push(observation);
+    updateStateFromObservation(state, observation);
+    extractEvidenceFromObservation({ state, tool, observation });
 
     logEvent("info", "tool.observed", {
       runId: state.runId,
@@ -167,5 +258,6 @@ export async function runAgentLoop(state: AgentState): Promise<void> {
   // evidence и currentHypothesis (см. §12.1 ARCHITECTURE, finalizer.ts).
   if (!state.isFinished) {
     state.answer = buildFallbackAnswer(state);
+    state.isFinished = true;
   }
 }

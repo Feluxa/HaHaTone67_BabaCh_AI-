@@ -37,6 +37,7 @@ export const AgentObservationSchema = z.object({
 export const AgentStateSchema = z.object({
   runId: z.string().min(1),
   caseId: z.string().min(1),
+  dryRun: z.boolean().optional(),
   ticketId: z.string().optional(),
   customerId: z.string().optional(),
   problemSummary: z.string().optional(),
@@ -69,10 +70,12 @@ export function createInitialAgentState(input: {
   runId: string;
   caseId: string;
   maxSteps?: number;
+  dryRun?: boolean;
 }): AgentState {
   return {
     runId: input.runId,
     caseId: input.caseId,
+    dryRun: input.dryRun,
     evidence: [],
     observations: [],
     actionsPlanned: [],

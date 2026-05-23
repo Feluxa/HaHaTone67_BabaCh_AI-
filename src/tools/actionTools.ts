@@ -14,7 +14,7 @@ export const refundTransactionTool: ToolDefinition<RefundTransactionArgs> = {
   inputSchema: RefundTransactionArgsSchema,
   async execute(args, state) {
     const data = await sandboxClient.post(
-      "/actions/refund",
+      "/billing/refund",
       {
         transaction_id: args.transactionId,
         customer_id: args.customerId,
@@ -36,7 +36,7 @@ export const refundTransactionTool: ToolDefinition<RefundTransactionArgs> = {
 
     return {
       type: "action_result",
-      source: "POST /actions/refund",
+      source: "POST /billing/refund",
       status: "success",
       data,
     };

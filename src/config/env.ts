@@ -8,7 +8,16 @@ export const EnvSchema = z.object({
   SANDBOX_URL: z.string().url().default("http://127.0.0.1:8000"),
   TEAM_NAME: z.string().min(1).default("team-alpha"),
   GIGACHAT_API_KEY: z.string().optional(),
-  GIGACHAT_MODEL: z.string().default("GigaChat-2-Pro"),
+  GIGACHAT_AUTH_URL: z
+    .string()
+    .url()
+    .default("https://ngw.devices.sberbank.ru:9443/api/v2/oauth"),
+  GIGACHAT_API_URL: z
+    .string()
+    .url()
+    .default("https://gigachat.devices.sberbank.ru/api/v1/chat/completions"),
+  GIGACHAT_MODEL: z.string().default("GigaChat-2-Max"),
+  GIGACHAT_SCOPE: z.string().min(1).default("GIGACHAT_API_PERS"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 

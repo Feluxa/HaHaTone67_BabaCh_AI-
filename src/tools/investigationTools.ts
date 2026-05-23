@@ -194,7 +194,7 @@ export const getSubscriptionByIdTool: ToolDefinition<GetSubscriptionByIdArgs> = 
 };
 
 /**
- * Searches the knowledge base (GET /knowledge-base/search?query={query}).
+ * Searches the knowledge base (GET /knowledge-base/search?q={query}).
  *
  * Returns matching articles ranked by relevance. Used to find resolution
  * procedures for known issue patterns before formulating the agent's answer.
@@ -202,7 +202,7 @@ export const getSubscriptionByIdTool: ToolDefinition<GetSubscriptionByIdArgs> = 
 export const searchKnowledgeBaseTool: ToolDefinition<SearchKnowledgeBaseArgs> = {
   name: "searchKnowledgeBase",
   description:
-    "Search the knowledge base for relevant articles via GET /knowledge-base/search?query={query}.",
+    "Search the knowledge base for relevant articles via GET /knowledge-base/search?q={query}.",
   riskLevel: "low",
   requiresEvidence: false,
   requiresPolicyCheck: false,
