@@ -33,7 +33,7 @@ export interface TransactionSnapshot {
   customerId: string;
   amount: number;
   currency: string;
-  status: "pending" | "completed" | "failed" | "refunded";
+  status: "pending" | "completed" | "posted" | "failed" | "refunded";
   alreadyRefunded: boolean;
 }
 
@@ -56,27 +56,36 @@ export function canRefundTransaction(input: RefundPolicyInput): PolicyDecision {
     };
   }
 
-  const relevantEvidence = evidence.filter((item) => {
-    return (
-      item.objectId === args.transactionId ||
-      item.supports.includes(args.transactionId) ||
-      item.fact.includes(args.transactionId)
-    );
-  });
+  // ── Evidence gate ──────────────────────────────────────────────────────────
+  //
+  // Two independent requirements must both be met:
+  //
+  //   1. Direct evidence — at least one high-confidence item whose objectId
+  //      matches the target transaction.  This proves the specific transaction
+  //      was actually inspected (via getTransactionById), not just mentioned in
+  //      a list or inferred from a duplicate-pair fact.
+  //
+  //   2. Investigation breadth — the total evidence count must be ≥ 2.
+  //      The second item can be a duplicate-pair record, a KB article, a user
+  //      profile fact, etc.  This ensures the agent ran a proper investigation
+  //      before reaching for a high-risk action.
+  const directEvidence = evidence.filter(
+    (item) => item.objectId === args.transactionId && item.confidence === "high",
+  );
 
-  if (relevantEvidence.length === 0) {
+  if (directEvidence.length === 0) {
     return {
       allowed: false,
       code: "NO_EVIDENCE",
-      reason: "No evidence found for the target transaction.",
+      reason: "No high-confidence evidence found for the target transaction.",
     };
   }
 
-  if (relevantEvidence.length < 2) {
+  if (evidence.length < 2) {
     return {
       allowed: false,
       code: "INSUFFICIENT_EVIDENCE",
-      reason: "High risk refund requires at least two evidence records.",
+      reason: "Refund requires at least two evidence records in total.",
     };
   }
 
@@ -90,8 +99,7 @@ export function canRefundTransaction(input: RefundPolicyInput): PolicyDecision {
 
   // alreadyRefunded проверяется до status-сужения, чтобы флаг срабатывал
   // независимо от текущего статуса (внешний процесс мог выставить его раньше).
-  // status === "refunded" тоже проверяется здесь — до следующего if, где
-  // TypeScript сузит тип до "completed" и ветка станет недостижимой.
+  // status === "refunded" тоже проверяется здесь, до следующей ветки.
   if (transaction.alreadyRefunded || transaction.status === "refunded") {
     return {
       allowed: false,
@@ -100,11 +108,13 @@ export function canRefundTransaction(input: RefundPolicyInput): PolicyDecision {
     };
   }
 
-  if (transaction.status !== "completed") {
+  // "posted" is the sandbox equivalent of "completed" — both represent a
+  // fully settled transaction eligible for refund.
+  if (!["completed", "posted"].includes(transaction.status)) {
     return {
       allowed: false,
       code: "INVALID_TRANSACTION_STATE",
-      reason: "Only completed transactions can be refunded.",
+      reason: "Only completed or posted transactions can be refunded.",
     };
   }
 

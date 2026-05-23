@@ -16,6 +16,8 @@ import {
   SearchKnowledgeBaseArgsSchema,
   type GetKnowledgeBaseArticleArgs,
   GetKnowledgeBaseArticleArgsSchema,
+  type GetUserLimitsArgs,
+  GetUserLimitsArgsSchema,
   type ToolDefinition,
 } from "./toolSchemas";
 
@@ -289,6 +291,36 @@ export const getKnowledgeBaseArticleTool: ToolDefinition<GetKnowledgeBaseArticle
   },
 };
 
+/**
+ * Fetches spending limits for the customer (GET /users/{user_id}/limits).
+ *
+ * Returns card and operation limits including daily_limit, used amount, and
+ * remaining capacity. Essential for cases where a transaction was declined due
+ * to limit exhaustion (e.g. daily card limit exceeded).
+ */
+export const getUserLimitsTool: ToolDefinition<GetUserLimitsArgs> = {
+  name: "getUserLimits",
+  description:
+    "Load spending limits for a customer from the bank sandbox via GET /users/{user_id}/limits. Call when a transaction is declined to check if a limit was exceeded.",
+  riskLevel: "low",
+  requiresEvidence: false,
+  requiresPolicyCheck: false,
+  inputSchema: GetUserLimitsArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(
+      `/users/${args.userId}/limits`,
+      { runId: state.runId },
+    );
+
+    return {
+      type: "user_limits",
+      source: `GET /users/${args.userId}/limits`,
+      status: "success",
+      data,
+    };
+  },
+};
+
 export const investigationTools = [
   getTicketMessagesTool,
   getCustomerProfileTool,
@@ -298,4 +330,5 @@ export const investigationTools = [
   getSubscriptionByIdTool,
   searchKnowledgeBaseTool,
   getKnowledgeBaseArticleTool,
+  getUserLimitsTool,
 ];

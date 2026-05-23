@@ -217,7 +217,6 @@ function toolInputShape(toolName: string): unknown {
       amount: "number",
       currency: "3-letter currency code",
       reason: "string, 10..500 chars",
-      idempotencyKey: "string, at least 16 chars",
     },
   };
 
@@ -269,6 +268,7 @@ function buildUserPrompt(state: AgentState): string {
         "Before final_answer, collect concrete object evidence: ticket, user/subscription/transaction as relevant.",
         "Before final_answer, call searchKnowledgeBase with a concise query for the detected scenario.",
         "Do not repeat a tool call if the same tool with the same identifier already succeeded.",
+        "If you found a duplicate transaction or unauthorized charge with sufficient evidence — you MUST call refundTransaction via tool_call BEFORE writing final_answer. Writing final_answer without calling refundTransaction means the refund was NOT executed.",
       ],
       availableTools: toolContext(),
       state: compactState(state),

@@ -31,6 +31,7 @@ function toArray(data: unknown): Record<string, unknown>[] {
       "subscriptions",
       "transactions",
       "articles",
+      "limits",
       "results",
       "data",
     ]) {
@@ -52,6 +53,8 @@ function toArray(data: unknown): Record<string, unknown>[] {
  *
  * @param baseIndex - position within the current extraction batch (0-based);
  *   combined with `state.evidence.length` to generate a unique sequential id.
+ * @param supportsOverride - optional override for the `supports` field;
+ *   defaults to `"{toolName}:{objectId}"` when omitted.
  */
 function buildEvidence(
   state: AgentState,
@@ -61,13 +64,14 @@ function buildEvidence(
   fact: string,
   toolName: string,
   confidence: "low" | "medium" | "high",
+  supportsOverride?: string,
 ): Evidence {
   return EvidenceSchema.parse({
     id: `ev_${state.evidence.length + baseIndex + 1}`,
     source,
     objectId,
     fact,
-    supports: `${toolName}:${objectId}`,
+    supports: supportsOverride ?? `${toolName}:${objectId}`,
     confidence,
     createdAt: new Date().toISOString(),
   });
@@ -110,9 +114,10 @@ export function extractFromObservation(input: {
     objectId: string,
     fact: string,
     confidence: "low" | "medium" | "high",
+    supportsOverride?: string,
   ): void => {
     results.push(
-      buildEvidence(state, results.length, source, objectId, fact, tool.name, confidence),
+      buildEvidence(state, results.length, source, objectId, fact, tool.name, confidence, supportsOverride),
     );
   };
 
@@ -240,8 +245,9 @@ export function extractFromObservation(input: {
 
     // ── GET /users/{user_id}/transactions ────────────────────────────────────
     //
-    // Detects potential duplicate charges: pairs of transactions sharing the
-    // same amount and merchant that are less than 60 seconds apart.
+    // Two independent passes over the transaction list:
+    //   1. Declined transactions — high-confidence signal for limit/fraud cases.
+    //   2. Duplicate detection — pairs with same amount+merchant within 60 s.
     case "getTransactions": {
       const txns = toArray(data);
 
@@ -250,6 +256,45 @@ export function extractFromObservation(input: {
         const txnId = str(txn, "id") || str(txn, "transaction_id");
         if (!txnId) continue;
 
+        // ── Pass 1: declined transactions ──────────────────────────────────
+        //
+        // Declined transactions are a direct evidence of a limit hit or
+        // acquirer refusal. Extract response_code from the metadata_json field
+        // (a bank-controlled string, not user input) to surface the exact
+        // reason in the trace.
+        if (str(txn, "status") === "declined") {
+          const amount = txn["amount"];
+          const amountStr =
+            typeof amount === "number"
+              ? String(amount)
+              : typeof amount === "string"
+                ? amount
+                : "?";
+          const currency = str(txn, "currency");
+
+          let responseCode = "неизвестен";
+          const metadataJson = str(txn, "metadata_json");
+          if (metadataJson) {
+            try {
+              const meta: unknown = JSON.parse(metadataJson);
+              if (isRecord(meta)) {
+                responseCode = str(meta, "response_code") || responseCode;
+              }
+            } catch {
+              // metadata_json is not valid JSON — keep default
+            }
+          }
+
+          add(
+            txnId,
+            `Транзакция ${txnId} на сумму ${amountStr} ${currency} отклонена: ${responseCode}`,
+            "high",
+          );
+          // Declined transactions cannot be duplicate charges — skip pass 2.
+          continue;
+        }
+
+        // ── Pass 2: duplicate charge detection ─────────────────────────────
         const txnAmount = Number(txn["amount"]);
         if (isNaN(txnAmount)) continue;
 
@@ -324,6 +369,9 @@ export function extractFromObservation(input: {
           articleId,
           `Найдена статья базы знаний ${articleId}: ${title}`,
           "low",
+          // Explicit reminder in the supports field: search results are stubs;
+          // the agent MUST follow up with getKnowledgeBaseArticle for each article.
+          `searchKnowledgeBase:${articleId} → требует getKnowledgeBaseArticle`,
         );
       }
       break;
@@ -349,6 +397,46 @@ export function extractFromObservation(input: {
         `Статья ${articleId} '${title}': ${snippet || "содержимое недоступно"}`,
         "medium",
       );
+      break;
+    }
+
+    // ── GET /users/{user_id}/limits ──────────────────────────────────────────
+    //
+    // Each limit record documents the configured ceiling and how much of it
+    // has been consumed. High confidence: this is authoritative bank data used
+    // directly to explain declined transactions.
+    case "getUserLimits": {
+      const limits = toArray(data);
+      for (const lim of limits) {
+        const limId = str(lim, "id");
+        if (!limId) continue;
+
+        const limitType = str(lim, "limit_type") || str(lim, "type") || "неизвестен";
+
+        const amount = lim["amount"];
+        const amountStr =
+          typeof amount === "number"
+            ? String(amount)
+            : typeof amount === "string"
+              ? amount
+              : "?";
+
+        const usedAmount = lim["used_amount"];
+        const usedAmountStr =
+          typeof usedAmount === "number"
+            ? String(usedAmount)
+            : typeof usedAmount === "string"
+              ? usedAmount
+              : "?";
+
+        const currency = str(lim, "currency");
+
+        add(
+          limId,
+          `Лимит ${limId}: тип ${limitType}, лимит ${amountStr} ${currency}, использовано ${usedAmountStr}`,
+          "high",
+        );
+      }
       break;
     }
 

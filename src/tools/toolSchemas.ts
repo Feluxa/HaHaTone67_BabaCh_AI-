@@ -63,6 +63,13 @@ export const GetKnowledgeBaseArticleArgsSchema = z.object({
 
 export type GetKnowledgeBaseArticleArgs = z.infer<typeof GetKnowledgeBaseArticleArgsSchema>;
 
+/** GET /users/{user_id}/limits — лимиты клиента по картам и операциям. */
+export const GetUserLimitsArgsSchema = z.object({
+  userId: z.string().min(1),
+});
+
+export type GetUserLimitsArgs = z.infer<typeof GetUserLimitsArgsSchema>;
+
 export interface ToolDefinition<TArgs> {
   name: string;
   description: string;
