@@ -310,11 +310,12 @@ async function autoFollowUp(
 
   // ── getTransactions → fetch anomalous transactions ───────────────────────
   //
-  // Two criteria trigger an eager getTransactionById follow-up:
+  // Two categories trigger an eager getTransactionById follow-up:
   //
   //   1. status === "declined"
   //      The transaction was rejected; the agent needs the full record (decline
   //      reason, response code, limits) to investigate auth / limit issues.
+  //      No cap — declined transactions are typically 1-2 per case.
   //
   //   2. kind === "card_purchase" AND status ∈ { "posted", "completed" }
   //      A settled card purchase is the most common subject of support cases
@@ -322,29 +323,61 @@ async function autoFollowUp(
   //      eagerly ensures PolicyGuard has high-confidence transaction evidence
   //      before evaluating any high-risk action — even when the LLM did not
   //      emit a getTransactionById tool_call of its own.
+  //      Capped at SETTLED_PURCHASE_LIMIT (most recent by created_at) to avoid
+  //      20+ calls on accounts with many card_purchase records.
   //
   // ATM withdrawals and holds are covered by their own dedicated follow-up
   // triggers (getUserAtmOperations, getUserHolds) and are excluded here to
   // prevent double-fetching.
+  //
+  // After processing individual transactions, fires a searchKnowledgeBase
+  // follow-up if no KB evidence exists yet — provides policy context the LLM
+  // may need before reaching a final_answer.
   if (primaryToolName === "getTransactions") {
+    const SETTLED_PURCHASE_LIMIT = 5;
+
     const txns = toItems(data);
 
+    // ── 1. Declined — open all, no cap ───────────────────────────────────────
+    const declinedIds: string[] = [];
     for (const txn of txns) {
-      const status = txn["status"];
-      const kind   = txn["kind"];
-
-      const isDeclined        = status === "declined";
-      const isSettledPurchase =
-        kind === "card_purchase" &&
-        (status === "posted" || status === "completed");
-
-      if (!isDeclined && !isSettledPurchase) continue;
-
+      if (txn["status"] !== "declined") continue;
       const txnId =
         (typeof txn["id"] === "string" ? txn["id"] : "") ||
         (typeof txn["transaction_id"] === "string" ? txn["transaction_id"] : "");
       if (!txnId) continue;
+      declinedIds.push(txnId);
+    }
 
+    // ── 2. Settled card purchases — sort newest-first, cap at limit ───────────
+    const settledPurchases = txns.filter(
+      (txn) =>
+        txn["kind"] === "card_purchase" &&
+        (txn["status"] === "posted" || txn["status"] === "completed"),
+    );
+    settledPurchases.sort((a, b) => {
+      const dateA = typeof a["created_at"] === "string" ? a["created_at"] : "";
+      const dateB = typeof b["created_at"] === "string" ? b["created_at"] : "";
+      return dateB.localeCompare(dateA); // descending: newest first
+    });
+    const settledIds: string[] = settledPurchases
+      .slice(0, SETTLED_PURCHASE_LIMIT)
+      .map((txn) =>
+        (typeof txn["id"] === "string" ? txn["id"] : "") ||
+        (typeof txn["transaction_id"] === "string" ? txn["transaction_id"] : ""),
+      )
+      .filter(Boolean);
+
+    // Combine, deduplicate (a declined txn might also be card_purchase).
+    const alreadyDeclinedSet = new Set(declinedIds);
+    const toFetch: Array<{ txnId: string; reason: string }> = [
+      ...declinedIds.map((id) => ({ txnId: id, reason: "declined" })),
+      ...settledIds
+        .filter((id) => !alreadyDeclinedSet.has(id))
+        .map((id) => ({ txnId: id, reason: "settled_card_purchase" })),
+    ];
+
+    for (const { txnId, reason } of toFetch) {
       // Skip if we already have a detail observation for this transaction.
       if (
         state.observations.some(
@@ -357,7 +390,7 @@ async function autoFollowUp(
         trigger: "getTransactions",
         followUp: "getTransactionById",
         transactionId: txnId,
-        reason: isDeclined ? "declined" : "settled_card_purchase",
+        reason,
       });
 
       try {
@@ -377,6 +410,42 @@ async function autoFollowUp(
           trigger: "getTransactions",
           followUp: "getTransactionById",
           transactionId: txnId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // ── 3. searchKnowledgeBase — policy context for transaction cases ─────────
+    //
+    // Fired once after the transactions loop, only when no KB evidence exists
+    // yet.  Provides policy articles the LLM needs before final_answer (e.g.
+    // refund eligibility, fraud / prompt-injection policy).
+    if (!state.evidence.some((ev) => ev.objectId.startsWith("kb_"))) {
+      const query = "prompt injection fraud refund policy";
+
+      logEvent("info", "auto_follow_up", {
+        runId: state.runId,
+        trigger: "getTransactions",
+        followUp: "searchKnowledgeBase",
+        query,
+      });
+
+      try {
+        const followObs = await searchKnowledgeBaseTool.execute({ query }, state);
+        commitObservation(
+          state,
+          searchKnowledgeBaseTool as unknown as ToolDefinition<unknown>,
+          { query },
+          followObs,
+        );
+        // Chain: open each article returned by the search in the same pass.
+        await autoFollowUp(state, "searchKnowledgeBase", followObs);
+      } catch (err) {
+        logEvent("warn", "auto_follow_up.error", {
+          runId: state.runId,
+          trigger: "getTransactions",
+          followUp: "searchKnowledgeBase",
+          query,
           error: err instanceof Error ? err.message : String(err),
         });
       }

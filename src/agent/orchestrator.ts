@@ -117,6 +117,8 @@ export async function solveCase(input: SolveCaseInput): Promise<SolveCaseResult>
     dryRun: isDryRun,
   });
 
+  state.casePassword = input.casePassword;
+
   const caseData = await casesClient.getCase(input.caseId, runId, input.casePassword);
   state.caseData = caseData;
   state.ticketId = extractTicketId(caseData);

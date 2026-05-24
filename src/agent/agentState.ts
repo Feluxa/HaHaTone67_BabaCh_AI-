@@ -52,6 +52,8 @@ export const AgentStateSchema = z.object({
   isFinished: z.boolean(),
   maxSteps: z.number().int().positive(),
   caseData: z.unknown().optional(),
+  /** X-Case-Password forwarded to every sandbox request for locked cases. */
+  casePassword: z.string().optional(),
 });
 
 // ─────────────────────────────────────────────────────────────

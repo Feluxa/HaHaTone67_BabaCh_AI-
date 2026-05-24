@@ -27,7 +27,7 @@ export const refundTransactionTool: ToolDefinition<RefundTransactionArgs> = {
         reason: args.reason,
         idempotency_key: args.idempotencyKey,
       },
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     state.actionsDone.push({
@@ -72,7 +72,7 @@ export const createDisputeTool: ToolDefinition<CreateDisputeArgs> = {
         transaction_id: args.transactionId,
         reason: args.reason,
       },
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     state.actionsDone.push({
@@ -116,7 +116,7 @@ export const createReversalTool: ToolDefinition<CreateReversalArgs> = {
         transaction_id: args.transactionId,
         reason: args.reason,
       },
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     state.actionsDone.push({

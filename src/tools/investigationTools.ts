@@ -49,7 +49,7 @@ export const getTicketMessagesTool: ToolDefinition<GetTicketMessagesArgs> = {
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/support/tickets/${args.ticketId}`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -78,7 +78,7 @@ export const getCustomerProfileTool: ToolDefinition<GetCustomerProfileArgs> = {
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/users/${args.customerId}/subscriptions`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -108,7 +108,7 @@ export const getTransactionsTool: ToolDefinition<GetTransactionsArgs> = {
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/users/${args.customerId}/transactions?limit=${args.limit}`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -137,7 +137,7 @@ export const getUserProfileTool: ToolDefinition<GetUserProfileArgs> = {
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/users/${args.userId}`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -172,7 +172,7 @@ export const getTransactionByIdTool: ToolDefinition<GetTransactionByIdArgs> = {
   async execute(args, state) {
     const rawData = await sandboxClient.get(
       `/transactions/${args.transactionId}`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     // Whitelist: only bank-controlled fields reach the LLM context.
@@ -229,7 +229,7 @@ export const getSubscriptionByIdTool: ToolDefinition<GetSubscriptionByIdArgs> = 
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/subscriptions/${args.subscriptionId}`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -259,7 +259,7 @@ export const searchKnowledgeBaseTool: ToolDefinition<SearchKnowledgeBaseArgs> = 
     const encodedQuery = encodeURIComponent(args.query);
     const data = await sandboxClient.get(
       `/knowledge-base/search?q=${encodedQuery}`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -289,7 +289,7 @@ export const getKnowledgeBaseArticleTool: ToolDefinition<GetKnowledgeBaseArticle
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/knowledge-base/articles/${args.articleId}`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -319,7 +319,7 @@ export const getUserLimitsTool: ToolDefinition<GetUserLimitsArgs> = {
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/users/${args.userId}/limits`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -350,7 +350,7 @@ export const getUserFraudAlertsTool: ToolDefinition<GetUserFraudAlertsArgs> = {
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/users/${args.userId}/fraud-alerts`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -380,7 +380,7 @@ export const getUserAtmOperationsTool: ToolDefinition<GetUserAtmOperationsArgs> 
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/users/${args.userId}/atm-operations`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -410,7 +410,7 @@ export const getAtmByIdTool: ToolDefinition<GetAtmByIdArgs> = {
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/atms/${args.atmId}`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -442,7 +442,7 @@ export const getTransactionAuthorizationsTool: ToolDefinition<GetTransactionAuth
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/transactions/${args.transactionId}/authorizations`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
@@ -472,7 +472,7 @@ export const getUserHoldsTool: ToolDefinition<GetUserHoldsArgs> = {
   async execute(args, state) {
     const data = await sandboxClient.get(
       `/users/${args.userId}/holds`,
-      { runId: state.runId },
+      { runId: state.runId, casePassword: state.casePassword },
     );
 
     return {
