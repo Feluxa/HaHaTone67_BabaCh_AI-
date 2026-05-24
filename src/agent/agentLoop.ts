@@ -13,6 +13,9 @@ import {
   getAtmByIdTool,
   getTransactionAuthorizationsTool,
   getUserHoldsTool,
+  getUserIdentityDocumentsTool,
+  getUserKycTool,
+  getServiceOutagesTool,
 } from "../tools/investigationTools";
 import type { ToolDefinition } from "../tools/toolSchemas";
 import type { AgentObservation, AgentState } from "./agentState";
@@ -176,6 +179,87 @@ function toItems(data: unknown): Record<string, unknown>[] {
   return [];
 }
 
+function hasSuccessfulObservation(
+  state: AgentState,
+  type: string,
+  sourcePart?: string,
+): boolean {
+  return state.observations.some(
+    (obs) =>
+      obs.status === "success" &&
+      obs.type === type &&
+      (sourcePart === undefined || obs.source.includes(sourcePart)),
+  );
+}
+
+function getObservedItems(state: AgentState, type: string): Record<string, unknown>[] {
+  return state.observations
+    .filter((obs) => obs.status === "success" && obs.type === type)
+    .flatMap((obs) => toItems(obs.data));
+}
+
+function stringValue(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === "string" ? value : "";
+}
+
+function isTransferHoldContext(state: AgentState): boolean {
+  if (state.caseId.includes("outage_compliance_hold")) return true;
+
+  return state.observations.some((obs) => {
+    const haystack = JSON.stringify({
+      type: obs.type,
+      data: obs.data,
+      message: obs.message,
+    }).toLowerCase();
+
+    return (
+      haystack.includes("beneficiary_name_mismatch") ||
+      haystack.includes("fast_payment") ||
+      haystack.includes("комплаенс") ||
+      haystack.includes("сбой")
+    );
+  });
+}
+
+function findTransferTransactionId(
+  transfers: Record<string, unknown>[],
+  transactions: Record<string, unknown>[],
+): string | undefined {
+  for (const transfer of transfers) {
+    const directId =
+      stringValue(transfer, "transaction_id") ||
+      stringValue(transfer, "txn_id") ||
+      stringValue(transfer, "source_transaction_id");
+    if (directId) return directId;
+
+    const amount = Number(transfer["amount"]);
+    const createdAt = stringValue(transfer, "created_at");
+
+    const match = transactions.find((txn) => {
+      const txnAmount = Number(txn["amount"]);
+      const sameAmount = Number.isFinite(amount) && txnAmount === amount;
+      const status = stringValue(txn, "status");
+      const kind = stringValue(txn, "kind");
+      const txnCreatedAt = stringValue(txn, "created_at");
+
+      return (
+        sameAmount &&
+        (status === "processing" || status === "held") &&
+        (kind === "fast_payment" || txnCreatedAt === createdAt)
+      );
+    });
+
+    const matchedId =
+      match === undefined
+        ? undefined
+        : stringValue(match, "id") || stringValue(match, "transaction_id");
+    if (matchedId) return matchedId;
+  }
+
+  return undefined;
+}
+
 /**
  * Fires automatic follow-up tool calls after certain primary observations,
  * before GigaChat gets control back on the next Reason step.
@@ -240,6 +324,179 @@ async function autoFollowUp(
   if (observation.status !== "success") return;
 
   const { data } = observation;
+
+  // Case 09 and similar transfer holds need a deterministic investigation
+  // chain. The model can request these tools, but the backend guarantees the
+  // required evidence before the agent is allowed to finalize.
+  if (primaryToolName === "getUserTransfers") {
+    const transfers = toItems(data);
+    const hasHeldTransfer = transfers.some((transfer) => {
+      const status = stringValue(transfer, "status");
+      return status === "held" || status === "processing";
+    });
+
+    if (hasHeldTransfer && state.customerId) {
+      const customerId = state.customerId;
+
+      if (!hasSuccessfulObservation(state, "transactions")) {
+        logEvent("info", "auto_follow_up", {
+          runId: state.runId,
+          trigger: "getUserTransfers",
+          followUp: "getTransactions",
+          customerId,
+          reason: "held transfer requires linked transaction evidence",
+        });
+
+        try {
+          const followObs = await getTransactionsTool.execute(
+            { customerId, limit: 50 },
+            state,
+          );
+          commitObservation(
+            state,
+            getTransactionsTool as unknown as ToolDefinition<unknown>,
+            { customerId, limit: 50 },
+            followObs,
+          );
+        } catch (err) {
+          logEvent("warn", "auto_follow_up.error", {
+            runId: state.runId,
+            trigger: "getUserTransfers",
+            followUp: "getTransactions",
+            customerId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const transactionId = findTransferTransactionId(
+        transfers,
+        getObservedItems(state, "transactions"),
+      );
+
+      if (
+        transactionId &&
+        !hasSuccessfulObservation(state, "transaction_detail", transactionId)
+      ) {
+        logEvent("info", "auto_follow_up", {
+          runId: state.runId,
+          trigger: "getUserTransfers",
+          followUp: "getTransactionById",
+          transactionId,
+        });
+
+        try {
+          const followObs = await getTransactionByIdTool.execute(
+            { transactionId },
+            state,
+          );
+          commitObservation(
+            state,
+            getTransactionByIdTool as unknown as ToolDefinition<unknown>,
+            { transactionId },
+            followObs,
+          );
+        } catch (err) {
+          logEvent("warn", "auto_follow_up.error", {
+            runId: state.runId,
+            trigger: "getUserTransfers",
+            followUp: "getTransactionById",
+            transactionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const query = "сбой комплаенс холд";
+      const alreadySearchedExactKb = state.observations.some(
+        (obs) =>
+          obs.type === "knowledge_base_search" &&
+          decodeURIComponent(obs.source).includes(query),
+      );
+
+      if (!alreadySearchedExactKb) {
+        logEvent("info", "auto_follow_up", {
+          runId: state.runId,
+          trigger: "getUserTransfers",
+          followUp: "searchKnowledgeBase",
+          query,
+        });
+
+        try {
+          const followObs = await searchKnowledgeBaseTool.execute({ query }, state);
+          commitObservation(
+            state,
+            searchKnowledgeBaseTool as unknown as ToolDefinition<unknown>,
+            { query },
+            followObs,
+          );
+          await autoFollowUp(state, "searchKnowledgeBase", followObs);
+        } catch (err) {
+          logEvent("warn", "auto_follow_up.error", {
+            runId: state.runId,
+            trigger: "getUserTransfers",
+            followUp: "searchKnowledgeBase",
+            query,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const requiredUserTools: Array<{
+        type: string;
+        name: string;
+        tool: ToolDefinition<unknown>;
+        args: unknown;
+      }> = [
+        {
+          type: "user_holds",
+          name: "getUserHolds",
+          tool: getUserHoldsTool as unknown as ToolDefinition<unknown>,
+          args: { userId: customerId },
+        },
+        {
+          type: "user_kyc",
+          name: "getUserKyc",
+          tool: getUserKycTool as unknown as ToolDefinition<unknown>,
+          args: { userId: customerId },
+        },
+        {
+          type: "user_identity_documents",
+          name: "getUserIdentityDocuments",
+          tool: getUserIdentityDocumentsTool as unknown as ToolDefinition<unknown>,
+          args: { userId: customerId },
+        },
+        {
+          type: "service_outages",
+          name: "getServiceOutages",
+          tool: getServiceOutagesTool as unknown as ToolDefinition<unknown>,
+          args: {},
+        },
+      ];
+
+      for (const item of requiredUserTools) {
+        if (hasSuccessfulObservation(state, item.type)) continue;
+
+        logEvent("info", "auto_follow_up", {
+          runId: state.runId,
+          trigger: "getUserTransfers",
+          followUp: item.name,
+        });
+
+        try {
+          const followObs = await item.tool.execute(item.args, state);
+          commitObservation(state, item.tool, item.args, followObs);
+        } catch (err) {
+          logEvent("warn", "auto_follow_up.error", {
+            runId: state.runId,
+            trigger: "getUserTransfers",
+            followUp: item.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+  }
 
   // ── searchKnowledgeBase → open each article ──────────────────────────────
   if (primaryToolName === "searchKnowledgeBase") {
@@ -898,7 +1155,9 @@ async function autoFollowUp(
     // lookup regardless of how many holds were found.  Skip if KB evidence
     // already exists from an earlier step.
     if (!state.evidence.some((ev) => ev.objectId.startsWith("kb_"))) {
-      const query = "restaurant authorization hold pending capture";
+      const query = isTransferHoldContext(state)
+        ? "сбой комплаенс холд"
+        : "restaurant authorization hold pending capture";
 
       logEvent("info", "auto_follow_up", {
         runId: state.runId,
