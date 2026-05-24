@@ -30,6 +30,12 @@ import {
   GetUserHoldsArgsSchema,
   type GetUserTransfersArgs,
   GetUserTransfersArgsSchema,
+  type GetUserWebhooksArgs,
+  GetUserWebhooksArgsSchema,
+  type GetUserNotificationsArgs,
+  GetUserNotificationsArgsSchema,
+  type GetUserProductEnrollmentsArgs,
+  GetUserProductEnrollmentsArgsSchema,
   type GetUserKycArgs,
   GetUserKycArgsSchema,
   type GetUserIdentityDocumentsArgs,
@@ -106,6 +112,39 @@ export const getUserTransfersTool: ToolDefinition<GetUserTransfersArgs> = {
   async execute(args, state) {
     const data = await sandboxClient.get(`/users/${args.userId}/transfers`, { runId: state.runId, casePassword: state.casePassword });
     return { type: "user_transfers", source: `GET /users/${args.userId}/transfers`, status: "success", data };
+  }
+};
+
+export const getUserWebhooksTool: ToolDefinition<GetUserWebhooksArgs> = {
+  name: "getUserWebhooks",
+  description: "Получить историю вебхуков клиента (GET /users/{userId}/webhooks).",
+  riskLevel: "low", requiresEvidence: false, requiresPolicyCheck: false,
+  inputSchema: GetUserWebhooksArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(`/users/${args.userId}/webhooks`, { runId: state.runId, casePassword: state.casePassword });
+    return { type: "user_webhooks", source: `GET /users/${args.userId}/webhooks`, status: "success", data };
+  }
+};
+
+export const getUserNotificationsTool: ToolDefinition<GetUserNotificationsArgs> = {
+  name: "getUserNotifications",
+  description: "Получить историю уведомлений (push/sms) (GET /users/{userId}/notifications).",
+  riskLevel: "low", requiresEvidence: false, requiresPolicyCheck: false,
+  inputSchema: GetUserNotificationsArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(`/users/${args.userId}/notifications`, { runId: state.runId, casePassword: state.casePassword });
+    return { type: "user_notifications", source: `GET /users/${args.userId}/notifications`, status: "success", data };
+  }
+};
+
+export const getUserProductEnrollmentsTool: ToolDefinition<GetUserProductEnrollmentsArgs> = {
+  name: "getUserProductEnrollments",
+  description: "Получить историю регистраций в продуктах (GET /users/{userId}/product-enrollments).",
+  riskLevel: "low", requiresEvidence: false, requiresPolicyCheck: false,
+  inputSchema: GetUserProductEnrollmentsArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(`/users/${args.userId}/product-enrollments`, { runId: state.runId, casePassword: state.casePassword });
+    return { type: "user_product_enrollments", source: `GET /users/${args.userId}/product-enrollments`, status: "success", data };
   }
 };
 
@@ -555,4 +594,7 @@ export const investigationTools = [
   getUserKycTool,
   getUserIdentityDocumentsTool,
   getServiceOutagesTool,
+  getUserWebhooksTool,
+  getUserNotificationsTool,
+  getUserProductEnrollmentsTool
 ];

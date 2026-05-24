@@ -142,3 +142,12 @@ export type GetUserIdentityDocumentsArgs = z.infer<typeof GetUserIdentityDocumen
 
 export const GetServiceOutagesArgsSchema = z.object({});
 export type GetServiceOutagesArgs = z.infer<typeof GetServiceOutagesArgsSchema>;
+
+export const GetUserWebhooksArgsSchema = z.object({ userId: z.string().min(1) });
+export type GetUserWebhooksArgs = z.infer<typeof GetUserWebhooksArgsSchema>;
+
+export const GetUserNotificationsArgsSchema = z.object({ userId: z.string().min(1) });
+export type GetUserNotificationsArgs = z.infer<typeof GetUserNotificationsArgsSchema>;
+
+export const GetUserProductEnrollmentsArgsSchema = z.object({ userId: z.string().min(1) });
+export type GetUserProductEnrollmentsArgs = z.infer<typeof GetUserProductEnrollmentsArgsSchema>;

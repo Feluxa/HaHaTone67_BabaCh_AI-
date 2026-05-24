@@ -87,6 +87,9 @@ function evidenceToString(ev: Evidence): string {
   if (id.startsWith("kyc_")) return `kyc:${id}`;
   if (id.startsWith("doc_")) return `identity_document:${id}`;
   if (id.startsWith("out_")) return `service_outage:${id}`;
+  if (id.startsWith("wh_")) return `webhook:${id}`;
+  if (id.startsWith("ntf_")) return `notification:${id}`;
+  if (id.startsWith("enr_")) return `product_enrollment:${id}`;
 
   return id;
 }

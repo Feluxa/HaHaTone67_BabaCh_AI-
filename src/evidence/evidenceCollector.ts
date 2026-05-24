@@ -184,7 +184,32 @@ export function extractFromObservation(input: {
       }
       break;
     }
-    
+
+    case "user_webhooks": {
+      const items = toArray(data);
+      for (const item of items) {
+        const id = str(item, "id") || str(item, "webhook_id");
+        if (id) add(id, `Вебхук ${id}`, "high");
+      }
+      break;
+    }
+    case "user_notifications": {
+      const items = toArray(data);
+      for (const item of items) {
+        const id = str(item, "id") || str(item, "notification_id");
+        if (id) add(id, `Уведомление ${id}`, "high");
+      }
+      break;
+    }
+    case "user_product_enrollments": {
+      const items = toArray(data);
+      for (const item of items) {
+        const id = str(item, "id") || str(item, "enrollment_id");
+        if (id) add(id, `Enrollment ${id}`, "high");
+      }
+      break;
+    }
+
     case "getUserTransfers": {
       const transfers = toArray(data);
       for (const t of transfers) {
