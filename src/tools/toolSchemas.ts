@@ -130,3 +130,15 @@ export interface ToolDefinition<TArgs> {
   inputSchema: z.ZodType<TArgs>;
   execute: (args: TArgs, state: AgentState) => Promise<AgentObservation>;
 }
+
+export const GetUserTransfersArgsSchema = z.object({ userId: z.string().min(1) });
+export type GetUserTransfersArgs = z.infer<typeof GetUserTransfersArgsSchema>;
+
+export const GetUserKycArgsSchema = z.object({ userId: z.string().min(1) });
+export type GetUserKycArgs = z.infer<typeof GetUserKycArgsSchema>;
+
+export const GetUserIdentityDocumentsArgsSchema = z.object({ userId: z.string().min(1) });
+export type GetUserIdentityDocumentsArgs = z.infer<typeof GetUserIdentityDocumentsArgsSchema>;
+
+export const GetServiceOutagesArgsSchema = z.object({});
+export type GetServiceOutagesArgs = z.infer<typeof GetServiceOutagesArgsSchema>;

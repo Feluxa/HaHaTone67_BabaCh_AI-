@@ -28,6 +28,14 @@ import {
   GetTransactionAuthorizationsArgsSchema,
   type GetUserHoldsArgs,
   GetUserHoldsArgsSchema,
+  type GetUserTransfersArgs,
+  GetUserTransfersArgsSchema,
+  type GetUserKycArgs,
+  GetUserKycArgsSchema,
+  type GetUserIdentityDocumentsArgs,
+  GetUserIdentityDocumentsArgsSchema,
+  type GetServiceOutagesArgs,
+  GetServiceOutagesArgsSchema,
   type ToolDefinition,
 } from "./toolSchemas";
 
@@ -88,6 +96,50 @@ export const getCustomerProfileTool: ToolDefinition<GetCustomerProfileArgs> = {
       data,
     };
   },
+};
+
+export const getUserTransfersTool: ToolDefinition<GetUserTransfersArgs> = {
+  name: "getUserTransfers",
+  description: "Получить переводы клиента (GET /users/{userId}/transfers). Вызывай при расследовании проблем с переводами (fast_payment).",
+  riskLevel: "low", requiresEvidence: false, requiresPolicyCheck: false,
+  inputSchema: GetUserTransfersArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(`/users/${args.userId}/transfers`, { runId: state.runId, casePassword: state.casePassword });
+    return { type: "user_transfers", source: `GET /users/${args.userId}/transfers`, status: "success", data };
+  }
+};
+
+export const getUserKycTool: ToolDefinition<GetUserKycArgs> = {
+  name: "getUserKyc",
+  description: "Получить статус KYC проверки личности (GET /users/{userId}/kyc). Вызывай при подозрениях на комплаенс-холды.",
+  riskLevel: "low", requiresEvidence: false, requiresPolicyCheck: false,
+  inputSchema: GetUserKycArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(`/users/${args.userId}/kyc`, { runId: state.runId, casePassword: state.casePassword });
+    return { type: "user_kyc", source: `GET /users/${args.userId}/kyc`, status: "success", data };
+  }
+};
+
+export const getUserIdentityDocumentsTool: ToolDefinition<GetUserIdentityDocumentsArgs> = {
+  name: "getUserIdentityDocuments",
+  description: "Получить документы клиента (GET /users/{userId}/identity-documents).",
+  riskLevel: "low", requiresEvidence: false, requiresPolicyCheck: false,
+  inputSchema: GetUserIdentityDocumentsArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(`/users/${args.userId}/identity-documents`, { runId: state.runId, casePassword: state.casePassword });
+    return { type: "user_identity_documents", source: `GET /users/${args.userId}/identity-documents`, status: "success", data };
+  }
+};
+
+export const getServiceOutagesTool: ToolDefinition<GetServiceOutagesArgs> = {
+  name: "getServiceOutages",
+  description: "Получить активные сбои сервисов (GET /service-outages). Вызывай, если упоминаются проблемы на стороне провайдера или сбои.",
+  riskLevel: "low", requiresEvidence: false, requiresPolicyCheck: false,
+  inputSchema: GetServiceOutagesArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(`/service-outages`, { runId: state.runId, casePassword: state.casePassword });
+    return { type: "service_outages", source: `GET /service-outages`, status: "success", data };
+  }
 };
 
 /**
@@ -499,4 +551,8 @@ export const investigationTools = [
   getAtmByIdTool,
   getTransactionAuthorizationsTool,
   getUserHoldsTool,
+  getUserTransfersTool,
+  getUserKycTool,
+  getUserIdentityDocumentsTool,
+  getServiceOutagesTool,
 ];

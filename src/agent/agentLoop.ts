@@ -226,6 +226,17 @@ async function autoFollowUp(
   primaryToolName: string,
   observation: AgentObservation,
 ): Promise<void> {
+  if (primaryToolName === "getUserTransfers" || primaryToolName === "getTransactions") {
+    const dataStr = JSON.stringify(observation.data || {});
+    if (dataStr.includes('"status":"held"') || dataStr.includes('"status":"processing"')) {
+      state.observations.push({
+        type: "system_directive",
+        source: "policy_engine",
+        status: "success",
+        message: "SYSTEM DIRECTIVE: Обнаружена транзакция/перевод в статусе held или processing. Для завершения расследования ТЫ ОБЯЗАН вызвать: getUserHolds, getUserKyc, getUserIdentityDocuments, getServiceOutages, и searchKnowledgeBase с точным запросом 'сбой комплаенс холд'. Запрещено использовать final_answer до вызова всех этих инструментов."
+      });
+    }
+  }
   if (observation.status !== "success") return;
 
   const { data } = observation;
@@ -339,16 +350,15 @@ async function autoFollowUp(
     const txns = toItems(data);
 
     // ── 1. Declined — open all, no cap ───────────────────────────────────────
-    const declinedIds: string[] = [];
+    const anomalousIds: string[] = [];
     for (const txn of txns) {
-      if (txn["status"] !== "declined") continue;
-      const txnId =
-        (typeof txn["id"] === "string" ? txn["id"] : "") ||
-        (typeof txn["transaction_id"] === "string" ? txn["transaction_id"] : "");
-      if (!txnId) continue;
-      declinedIds.push(txnId);
+      if (txn["status"] === "declined" || txn["status"] === "processing" || txn["status"] === "failed") {
+        const txnId =
+          (typeof txn["id"] === "string" ? txn["id"] : "") ||
+          (typeof txn["transaction_id"] === "string" ? txn["transaction_id"] : "");
+        if (txnId) anomalousIds.push(txnId);
+      }
     }
-
     // ── 2. Settled card purchases — sort newest-first, cap at limit ───────────
     const settledPurchases = txns.filter(
       (txn) =>
@@ -369,11 +379,11 @@ async function autoFollowUp(
       .filter(Boolean);
 
     // Combine, deduplicate (a declined txn might also be card_purchase).
-    const alreadyDeclinedSet = new Set(declinedIds);
+    const alreadyAnomalousSet = new Set(anomalousIds);
     const toFetch: Array<{ txnId: string; reason: string }> = [
-      ...declinedIds.map((id) => ({ txnId: id, reason: "declined" })),
+      ...anomalousIds.map((id) => ({ txnId: id, reason: "anomalous_transaction" })),
       ...settledIds
-        .filter((id) => !alreadyDeclinedSet.has(id))
+        .filter((id) => !alreadyAnomalousSet.has(id))
         .map((id) => ({ txnId: id, reason: "settled_card_purchase" })),
     ];
 

@@ -184,6 +184,44 @@ export function extractFromObservation(input: {
       }
       break;
     }
+    
+    case "getUserTransfers": {
+      const transfers = toArray(data);
+      for (const t of transfers) {
+        const trnId = str(t, "id") || str(t, "transfer_id");
+        if (trnId) add(trnId, `Перевод ${trnId}: статус ${str(t, "status")}`, "high");
+
+        // beneficiary_id лежит прямо в корне объекта перевода
+        const benId = str(t, "beneficiary_id");
+        if (benId) add(benId, `Бенефициар ${benId}`, "high");
+      }
+      break;
+    }
+
+    case "getUserKyc": {
+      const kyc = isRecord(data) ? data : {};
+      const kycId = str(kyc, "id") || str(kyc, "kyc_id");
+      if (kycId) add(kycId, `KYC ${kycId}: статус ${str(kyc, "status")}`, "high");
+      break;
+    }
+
+    case "getUserIdentityDocuments": {
+      const docs = toArray(data);
+      for (const doc of docs) {
+        const docId = str(doc, "id") || str(doc, "document_id");
+        if (docId) add(docId, `Документ ${docId}`, "high");
+      }
+      break;
+    }
+
+    case "getServiceOutages": {
+      const outages = toArray(data);
+      for (const out of outages) {
+        const outId = str(out, "id") || str(out, "outage_id");
+        if (outId) add(outId, `Сбой ${outId}: статус ${str(out, "status")}`, "high");
+      }
+      break;
+    }
 
     // ── GET /transactions/{transaction_id} ──────────────────────────────────
     case "getTransactionById": {

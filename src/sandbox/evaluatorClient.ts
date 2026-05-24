@@ -77,12 +77,16 @@ function evidenceToString(ev: Evidence): string {
   if (id.startsWith("acc_"))  return `account:${id}`;
   if (id.startsWith("dis_"))   return `dispute:${id}`;
   if (id.startsWith("fraud_")) return `fraud_alert:${id}`;
-  // atmop_ must precede atm_ — both start with "atm", but "atmop_" is longer.
   if (id.startsWith("atmop_")) return `atm_operation:${id}`;
   if (id.startsWith("atm_"))  return `atm:${id}`;
   if (id.startsWith("rev_"))  return `reversal:${id}`;
   if (id.startsWith("auth_")) return `authorization:${id}`;
   if (id.startsWith("hold_")) return `hold:${id}`;
+  if (id.startsWith("trn_")) return `transfer:${id}`;
+  if (id.startsWith("ben_")) return `beneficiary:${id}`;
+  if (id.startsWith("kyc_")) return `kyc:${id}`;
+  if (id.startsWith("doc_")) return `identity_document:${id}`;
+  if (id.startsWith("out_")) return `service_outage:${id}`;
 
   return id;
 }
