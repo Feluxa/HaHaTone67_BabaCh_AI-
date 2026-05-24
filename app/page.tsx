@@ -11,6 +11,7 @@ import {
   Code,
   Group,
   Paper,
+  PasswordInput,
   ScrollArea,
   Stack,
   Table,
@@ -73,6 +74,20 @@ const CASES = [
     difficulty: "hard",
     ticketId: "tic_9ku2mf",
   },
+  {
+    id: "case_09_locked_outage_compliance_hold",
+    label: "09 outage compliance hold",
+    difficulty: "nightmare",
+    ticketId: "tic_r5c3hk",
+    locked: true,
+  },
+  {
+    id: "case_10_locked_subscription_webhook_conflict",
+    label: "10 subscription webhook conflict",
+    difficulty: "nightmare",
+    ticketId: "tic_u1m6xr",
+    locked: true,
+  },
 ] as const;
 
 type CaseId = (typeof CASES)[number]["id"];
@@ -94,6 +109,10 @@ interface RunResult {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isLockedCase(item: (typeof CASES)[number] | undefined): boolean {
+  return item !== undefined && "locked" in item && item.locked === true;
 }
 
 function stringArray(value: unknown): string {
@@ -151,6 +170,7 @@ export default function AgentDashboard() {
   const [opened, { toggle }] = useDisclosure();
   const [selectedCase, setSelectedCase] = useState<CaseId>(CASES[0].id);
   const [dryRun, setDryRun] = useState(false);
+  const [lockedCasePassword, setLockedCasePassword] = useState("boss-cases");
   const [results, setResults] = useState<Record<CaseId, RunResult>>(emptyResults);
   const [isBatchRunning, setIsBatchRunning] = useState(false);
 
@@ -175,13 +195,28 @@ export default function AgentDashboard() {
   }
 
   async function runCase(caseId: CaseId): Promise<void> {
+    const caseConfig = CASES.find((item) => item.id === caseId);
+    const casePassword = lockedCasePassword.trim();
+
+    if (isLockedCase(caseConfig) && casePassword.length === 0) {
+      patchResult(caseId, {
+        status: "error",
+        error: "Locked case password is required",
+      });
+      return;
+    }
+
     patchResult(caseId, { status: "running", error: undefined });
 
     try {
       const response = await fetch("/api/solve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ caseId, dryRun }),
+        body: JSON.stringify({
+          caseId,
+          dryRun,
+          ...(isLockedCase(caseConfig) ? { casePassword } : {}),
+        }),
       });
 
       const body: unknown = await response.json();
@@ -238,7 +273,7 @@ export default function AgentDashboard() {
 
       <AppShell.Navbar p="md">
         <Text fw={700} mb="sm">
-          Cases 1-8
+          Cases 1-10
         </Text>
 
         <Stack gap={6}>
@@ -264,6 +299,15 @@ export default function AgentDashboard() {
           />
         </Box>
 
+        <Box mt="md">
+          <PasswordInput
+            value={lockedCasePassword}
+            onChange={(event) => setLockedCasePassword(event.currentTarget.value)}
+            label="Locked case password"
+            placeholder="Required for 9-10"
+          />
+        </Box>
+
         <Stack mt="md" gap="sm">
           <Button
             leftSection={<IconPlayerPlay size={16} />}
@@ -278,7 +322,7 @@ export default function AgentDashboard() {
             disabled={anyRunning}
             onClick={runAllCases}
           >
-            Run all 1-8
+            Run all 1-10
           </Button>
         </Stack>
       </AppShell.Navbar>
@@ -294,6 +338,11 @@ export default function AgentDashboard() {
                 </Text>
                 <Group gap="xs" mt="sm">
                   <Badge variant="light">{activeCase.difficulty}</Badge>
+                  {isLockedCase(activeCase) && (
+                    <Badge color="orange" variant="light">
+                      locked
+                    </Badge>
+                  )}
                   <Badge color="gray" variant="light">
                     {activeCase.ticketId}
                   </Badge>

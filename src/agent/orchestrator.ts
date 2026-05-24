@@ -150,17 +150,21 @@ export async function solveCase(input: SolveCaseInput): Promise<SolveCaseResult>
 
   let evaluation: unknown | null = null;
   if (!isDryRun && stateResult.evidence.length > 0) {
-    evaluation = await evaluatorClient.evaluateCase(input.caseId, {
-      run_id: stateResult.runId,
-      answer: stateResult.answer ?? buildFallbackAnswer(stateResult),
-      evidence: stateResult.evidence,
-      actions: stateResult.actionsDone.map((action) => ({
-        name: action.name,
-        target: action.targetId,
-        status: actionStatusForEvaluate(action.status),
-        reason: action.reason,
-      })),
-    });
+    evaluation = await evaluatorClient.evaluateCase(
+      input.caseId,
+      {
+        run_id: stateResult.runId,
+        answer: stateResult.answer ?? buildFallbackAnswer(stateResult),
+        evidence: stateResult.evidence,
+        actions: stateResult.actionsDone.map((action) => ({
+          name: action.name,
+          target: action.targetId,
+          status: actionStatusForEvaluate(action.status),
+          reason: action.reason,
+        })),
+      },
+      input.casePassword,
+    );
 
     logEvent("info", "evaluate.submitted", {
       runId,

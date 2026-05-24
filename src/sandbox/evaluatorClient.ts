@@ -112,7 +112,11 @@ export const evaluatorClient = {
    * Evidence uses `evidenceToString` (type-prefixed objectId); actions use
    * `actionToString` ("name:targetId").
    */
-  evaluateCase(caseId: string, payload: EvaluatePayload): Promise<unknown> {
+  evaluateCase(
+    caseId: string,
+    payload: EvaluatePayload,
+    casePassword?: string,
+  ): Promise<unknown> {
     const wire = {
       run_id:   payload.run_id,
       answer:   payload.answer,
@@ -122,6 +126,7 @@ export const evaluatorClient = {
 
     return sandboxClient.post(`/cases/${caseId}/evaluate`, wire, {
       runId: payload.run_id,
+      casePassword,
     });
   },
 };
