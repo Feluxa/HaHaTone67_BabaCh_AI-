@@ -6,7 +6,7 @@
 **Роль документа:** единая архитектурная спецификация для команды разработки  
 **Платформа:** Node.js + TypeScript  
 **LLM:** GigaChat  
-**Целевая среда:** Bank Support Sandbox + Docker/VDS  
+**Целевая среда:** Bank Support Sandbox + локальный запуск  
 
 ---
 
@@ -88,7 +88,7 @@ Ticket → Investigation → Evidence → Policy Check → Action → Verificati
 | LLM | GigaChat API | Reasoning, tool selection, финальный ответ |
 | Storage | PostgreSQL | Трейсы, evidence, actions, результаты runs |
 | Cache/State | Redis | Временное состояние Agent Loop |
-| Infra | Docker, Docker Compose | Локальный запуск и деплой |
+| Infra | Docker, Docker Compose | Локальный запуск Sandbox и приложения |
 | Observability | Pino, OpenTelemetry | Логи и трассировка действий |
 
 ---

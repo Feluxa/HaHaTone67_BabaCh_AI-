@@ -19,7 +19,7 @@ npm install
 npm run dev
 ```
 
-Откройте `http://localhost:3000`. Для production-сборки: `npm run build && npm start`.
+Откройте `http://localhost:3000`.
 
 ### 3. Переменные окружения
 

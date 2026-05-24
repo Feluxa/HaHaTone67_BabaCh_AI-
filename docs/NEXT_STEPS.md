@@ -33,8 +33,8 @@
 2. Show run creation, tool calls, observations, policy decisions, evidence, final answer, metrics, and export.
 3. Keep client-facing answers separate from internal trace details.
 
-## Phase 6. Package and deploy
+## Phase 6. Final checks
 
-1. Add Dockerfile and docker-compose for Next.js plus bank sandbox.
-2. Add CI checks for lint, typecheck, and tests.
-3. Verify the full flow against open cases first, then add support for password-protected cases.
+1. Add CI checks for lint, typecheck, and tests.
+2. Verify the full flow against open cases first, then add support for password-protected cases.
+3. Keep local run instructions up to date for the app and bank sandbox.
