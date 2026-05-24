@@ -2,9 +2,15 @@ import { sandboxClient } from "../sandbox/sandboxClient";
 import {
   RefundTransactionArgsSchema,
   type RefundTransactionArgs,
+  CreateDisputeArgsSchema,
+  type CreateDisputeArgs,
+  CreateReversalArgsSchema,
+  type CreateReversalArgs,
 } from "../tools/toolSchemas";
 import {
   canRefundTransaction,
+  canCreateDispute,
+  canCreateReversal,
   type PolicyDecision,
   type TransactionSnapshot,
 } from "./rules";
@@ -68,6 +74,40 @@ function normalizeTransactionSnapshot(
       record.refunded === true ||
       stringField(record, ["status", "state"]) === "refunded",
   };
+}
+
+/**
+ * Validates createDispute args against business policy.
+ *
+ * Pure evidence check — no sandbox call required.
+ * Delegates to `canCreateDispute` in rules.ts.
+ */
+export async function checkDisputePolicy(
+  args: unknown,
+  state: AgentState,
+): Promise<PolicyDecision> {
+  const disputeArgs: CreateDisputeArgs = CreateDisputeArgsSchema.parse(args);
+  return canCreateDispute({
+    args: disputeArgs,
+    evidence: state.evidence,
+  });
+}
+
+/**
+ * Validates createReversal args against business policy.
+ *
+ * Pure evidence check — no sandbox call required.
+ * Delegates to `canCreateReversal` in rules.ts.
+ */
+export async function checkReversalPolicy(
+  args: unknown,
+  state: AgentState,
+): Promise<PolicyDecision> {
+  const reversalArgs: CreateReversalArgs = CreateReversalArgsSchema.parse(args);
+  return canCreateReversal({
+    args: reversalArgs,
+    evidence: state.evidence,
+  });
 }
 
 export async function checkRefundPolicy(

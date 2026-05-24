@@ -31,6 +31,12 @@ function toArray(data: unknown): Record<string, unknown>[] {
       "subscriptions",
       "transactions",
       "articles",
+      "alerts",
+      "fraud_alerts",
+      "atm_operations",
+      "operations",
+      "authorizations",
+      "holds",
       "limits",
       "results",
       "data",
@@ -434,6 +440,204 @@ export function extractFromObservation(input: {
         add(
           limId,
           `Лимит ${limId}: тип ${limitType}, лимит ${amountStr} ${currency}, использовано ${usedAmountStr}`,
+          "high",
+        );
+      }
+      break;
+    }
+
+    // ── GET /users/{user_id}/fraud-alerts ────────────────────────────────────
+    //
+    // Each alert is high-confidence evidence: it is an authoritative bank record
+    // linking a specific fraud type to a transaction. objectId = alert.id so that
+    // PolicyGuard can verify "fraud_*" evidence before allowing createDispute.
+    case "getUserFraudAlerts": {
+      const alerts = toArray(data);
+      for (const alert of alerts) {
+        const alertId = str(alert, "id") || str(alert, "alert_id");
+        if (!alertId) continue;
+
+        const alertType =
+          str(alert, "alert_type") || str(alert, "type") || "неизвестен";
+        const transactionId =
+          str(alert, "transaction_id") || str(alert, "txn_id") || "неизвестна";
+        const status = str(alert, "status") || "неизвестен";
+
+        add(
+          alertId,
+          `Fraud alert ${alertId}: тип ${alertType}, транзакция ${transactionId}, статус ${status}`,
+          "high",
+        );
+      }
+      break;
+    }
+
+    // ── POST /disputes ────────────────────────────────────────────────────────
+    //
+    // After a successful createDispute call the sandbox returns a dispute record
+    // with an id starting "dis_". We surface it as high-confidence evidence so
+    // it can be referenced in the final evaluator submission (mapped to
+    // "dispute:{objectId}" by evidenceToString in evaluatorClient).
+    case "createDispute": {
+      if (!isRecord(data)) break;
+
+      const disputeId = str(data, "id") || str(data, "dispute_id");
+      if (!disputeId) break;
+
+      const txnId =
+        str(data, "transaction_id") || str(data, "txn_id") || "неизвестна";
+      const status = str(data, "status") || "created";
+
+      add(
+        disputeId,
+        `Диспут ${disputeId} создан по транзакции ${txnId}, статус ${status}`,
+        "high",
+      );
+      break;
+    }
+
+    // ── GET /users/{user_id}/atm-operations ─────────────────────────────────
+    //
+    // Each ATM operation is high-confidence evidence: it is an authoritative
+    // bank record with amount, currency, status and the ATM identifier.
+    // objectId = op.id (atmop_* prefix) so PolicyGuard can gate createReversal
+    // on its presence.
+    case "getUserAtmOperations": {
+      const ops = toArray(data);
+      for (const op of ops) {
+        const opId = str(op, "id") || str(op, "operation_id");
+        if (!opId) continue;
+
+        const amount = op["amount"];
+        const amountStr =
+          typeof amount === "number"
+            ? String(amount)
+            : typeof amount === "string"
+              ? amount
+              : "?";
+        const currency = str(op, "currency");
+        const status = str(op, "status") || "неизвестен";
+        const atmId =
+          str(op, "atm_id") || str(op, "atmId") || str(op, "atm") || "неизвестен";
+
+        // transaction_id присутствует не всегда — включаем в fact только когда есть.
+        const opTxnId = str(op, "transaction_id") || str(op, "txn_id");
+        const txnSuffix = opTxnId ? `, транзакция ${opTxnId}` : "";
+
+        add(
+          opId,
+          `ATM операция ${opId}: сумма ${amountStr} ${currency}, статус ${status}, банкомат ${atmId}${txnSuffix}`,
+          "high",
+        );
+      }
+      break;
+    }
+
+    // ── GET /atms/{atm_id} ───────────────────────────────────────────────────
+    //
+    // ATM detail is medium-confidence: provides physical location context
+    // (address, status) needed to corroborate ATM operation evidence.
+    case "getAtmById": {
+      if (!isRecord(data)) break;
+
+      const atmId = str(data, "id") || str(data, "atm_id");
+      if (!atmId) break;
+
+      const address =
+        str(data, "address") || str(data, "location") || "адрес неизвестен";
+      const status = str(data, "status") || "неизвестен";
+
+      add(
+        atmId,
+        `Банкомат ${atmId}: адрес ${address}, статус ${status}`,
+        "medium",
+      );
+      break;
+    }
+
+    // ── POST /billing/reversal ───────────────────────────────────────────────
+    //
+    // After a successful createReversal call the sandbox returns a reversal
+    // record with an id starting "rev_". Surfaced as high-confidence evidence
+    // so it can be referenced in the evaluator submission via the
+    // "reversal:{objectId}" mapping in evaluatorClient.
+    case "createReversal": {
+      if (!isRecord(data)) break;
+
+      const reversalId = str(data, "id") || str(data, "reversal_id");
+      if (!reversalId) break;
+
+      const txnId =
+        str(data, "transaction_id") || str(data, "txn_id") || "неизвестна";
+      const status = str(data, "status") || "created";
+
+      add(
+        reversalId,
+        `Реверсал ${reversalId} создан по транзакции ${txnId}, статус ${status}`,
+        "high",
+      );
+      break;
+    }
+
+    // ── GET /transactions/{transactionId}/authorizations ─────────────────────
+    //
+    // Each authorization is high-confidence evidence: it is a bank-controlled
+    // record that links amount, status and merchant to a specific transaction.
+    // objectId = auth.id (auth_* prefix) so PolicyGuard can treat it as
+    // qualifying evidence for createReversal alongside atmop_* and hold_*.
+    case "getTransactionAuthorizations": {
+      const auths = toArray(data);
+      for (const auth of auths) {
+        const authId = str(auth, "id") || str(auth, "authorization_id");
+        if (!authId) continue;
+
+        const amount = auth["amount"];
+        const amountStr =
+          typeof amount === "number"
+            ? String(amount)
+            : typeof amount === "string"
+              ? amount
+              : "?";
+        const currency = str(auth, "currency");
+        const status = str(auth, "status") || "неизвестен";
+        const merchantName =
+          str(auth, "merchant_name") || str(auth, "merchant") || "неизвестен";
+
+        add(
+          authId,
+          `Авторизация ${authId}: сумма ${amountStr} ${currency}, статус ${status}, мерчант ${merchantName}`,
+          "high",
+        );
+      }
+      break;
+    }
+
+    // ── GET /users/{userId}/holds ─────────────────────────────────────────────
+    //
+    // Each hold is high-confidence evidence: it is an authoritative bank record
+    // linking an unsettled authorization to a transaction. objectId = hold.id
+    // (hold_* prefix) qualifies as evidence for createReversal.
+    case "getUserHolds": {
+      const holds = toArray(data);
+      for (const hold of holds) {
+        const holdId = str(hold, "id") || str(hold, "hold_id");
+        if (!holdId) continue;
+
+        const amount = hold["amount"];
+        const amountStr =
+          typeof amount === "number"
+            ? String(amount)
+            : typeof amount === "string"
+              ? amount
+              : "?";
+        const currency = str(hold, "currency");
+        const status = str(hold, "status") || "неизвестен";
+        const txnId =
+          str(hold, "transaction_id") || str(hold, "txn_id") || "неизвестна";
+
+        add(
+          holdId,
+          `Hold ${holdId}: сумма ${amountStr} ${currency}, статус ${status}, транзакция ${txnId}`,
           "high",
         );
       }

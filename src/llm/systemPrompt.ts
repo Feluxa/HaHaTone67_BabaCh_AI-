@@ -33,8 +33,11 @@ export function buildSystemPrompt(): string {
 9. Возвращай только валидный JSON по заданной схеме.
 10. После searchKnowledgeBase ВСЕГДА вызывай getKnowledgeBaseArticle для КАЖДОЙ найденной статьи — это обязательный следующий шаг, не пропускай его. Аналогично: после getTransactions открывай каждую релевантную транзакцию через getTransactionById, после getCustomerProfile — каждую релевантную подписку через getSubscriptionById. Список объектов не засчитывается как evidence — только индивидуальное открытие каждого.
 11. Для кейсов с отклонёнными транзакциями всегда вызывай getUserLimits и getTransactionById для отклонённой транзакции.
-12. При поиске в базе знаний используй английские ключевые слова: для дублирующих списаний — 'duplicate refund', для лимитов — 'daily limit exceeded', для подписок — 'subscription activation', для банкоматов — 'atm cash not dispensed', для холдов — 'authorization hold restaurant'.
+12. При поиске в базе знаний используй английские ключевые слова: для дублирующих списаний — 'duplicate refund', для лимитов — 'daily limit exceeded', для подписок — 'subscription activation', для банкоматов — 'atm cash not dispensed', для холдов — 'restaurant authorization hold pending capture'.
 13. Если расследование привело к выводу о необходимости возврата — ОБЯЗАТЕЛЬНО вызови refundTransaction через tool_call до final_answer. final_answer без предшествующего вызова refundTransaction означает что возврат не был выполнен.
+14. Для неавторизованных покупок — проверь fraud alerts через getUserFraudAlerts, потом вызови createDispute.
+15. Для кейсов с банкоматом — проверь ATM операции через getUserAtmOperations, получи данные банкомата через getAtmById, потом вызови createReversal. После получения ATM операций найди соответствующую транзакцию через getTransactions или getTransactionById — она нужна для createReversal.
+16. Для кейсов с авторизационным холдом — проверь holds через getUserHolds, авторизации через getTransactionAuthorizations, потом вызови createReversal.
 
 ═══════════════════════════════════════════════════════════════
 ЧТО ПООЩРЯЕТСЯ

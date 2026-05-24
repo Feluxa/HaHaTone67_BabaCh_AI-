@@ -70,6 +70,57 @@ export const GetUserLimitsArgsSchema = z.object({
 
 export type GetUserLimitsArgs = z.infer<typeof GetUserLimitsArgsSchema>;
 
+/** GET /users/{user_id}/fraud-alerts — fraud-алерты по клиенту. */
+export const GetUserFraudAlertsArgsSchema = z.object({
+  userId: z.string().min(1),
+});
+
+export type GetUserFraudAlertsArgs = z.infer<typeof GetUserFraudAlertsArgsSchema>;
+
+/** POST /disputes — создание диспута по неавторизованной транзакции. */
+export const CreateDisputeArgsSchema = z.object({
+  transactionId: z.string().min(1),
+  reason: z.string().min(10),
+});
+
+export type CreateDisputeArgs = z.infer<typeof CreateDisputeArgsSchema>;
+
+/** GET /users/{user_id}/atm-operations — ATM операции клиента. */
+export const GetUserAtmOperationsArgsSchema = z.object({
+  userId: z.string().min(1),
+});
+
+export type GetUserAtmOperationsArgs = z.infer<typeof GetUserAtmOperationsArgsSchema>;
+
+/** GET /atms/{atm_id} — данные конкретного банкомата. */
+export const GetAtmByIdArgsSchema = z.object({
+  atmId: z.string().min(1),
+});
+
+export type GetAtmByIdArgs = z.infer<typeof GetAtmByIdArgsSchema>;
+
+/** POST /billing/reversal — отмена ATM операции. */
+export const CreateReversalArgsSchema = z.object({
+  transactionId: z.string().min(1),
+  reason: z.string().min(10),
+});
+
+export type CreateReversalArgs = z.infer<typeof CreateReversalArgsSchema>;
+
+/** GET /transactions/{transactionId}/authorizations — авторизации по транзакции. */
+export const GetTransactionAuthorizationsArgsSchema = z.object({
+  transactionId: z.string().min(1),
+});
+
+export type GetTransactionAuthorizationsArgs = z.infer<typeof GetTransactionAuthorizationsArgsSchema>;
+
+/** GET /users/{userId}/holds — активные холды клиента. */
+export const GetUserHoldsArgsSchema = z.object({
+  userId: z.string().min(1),
+});
+
+export type GetUserHoldsArgs = z.infer<typeof GetUserHoldsArgsSchema>;
+
 export interface ToolDefinition<TArgs> {
   name: string;
   description: string;

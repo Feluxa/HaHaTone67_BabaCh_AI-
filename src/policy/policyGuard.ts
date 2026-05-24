@@ -2,7 +2,7 @@ import { logEvent } from "../observability/logger";
 import { toolRegistry } from "../tools/toolRegistry";
 import type { ToolDefinition } from "../tools/toolSchemas";
 import type { AgentState } from "../agent/agentState";
-import { checkRefundPolicy } from "./policyEngine";
+import { checkRefundPolicy, checkDisputePolicy, checkReversalPolicy } from "./policyEngine";
 import type { PolicyDecision } from "./rules";
 
 // ─────────────────────────────────────────────────────────────
@@ -212,6 +212,32 @@ export async function checkPolicyGuard(
   // ── 5. Business rules per tool ────────────────────────────
   if (tool.name === "refundTransaction") {
     const decision = await checkRefundPolicy(args, state);
+
+    logEvent(decision.allowed ? "info" : "warn", decision.allowed ? "policy.allowed" : "policy.blocked", {
+      runId: state.runId,
+      tool: tool.name,
+      ...(!decision.allowed && { code: decision.code }),
+      reason: decision.reason,
+    });
+
+    return decision;
+  }
+
+  if (tool.name === "createDispute") {
+    const decision = await checkDisputePolicy(args, state);
+
+    logEvent(decision.allowed ? "info" : "warn", decision.allowed ? "policy.allowed" : "policy.blocked", {
+      runId: state.runId,
+      tool: tool.name,
+      ...(!decision.allowed && { code: decision.code }),
+      reason: decision.reason,
+    });
+
+    return decision;
+  }
+
+  if (tool.name === "createReversal") {
+    const decision = await checkReversalPolicy(args, state);
 
     logEvent(decision.allowed ? "info" : "warn", decision.allowed ? "policy.allowed" : "policy.blocked", {
       runId: state.runId,

@@ -7,8 +7,12 @@ import { toolRegistry } from "../tools/toolRegistry";
 import {
   getKnowledgeBaseArticleTool,
   getTransactionByIdTool,
+  getTransactionsTool,
   getSubscriptionByIdTool,
   searchKnowledgeBaseTool,
+  getAtmByIdTool,
+  getTransactionAuthorizationsTool,
+  getUserHoldsTool,
 } from "../tools/investigationTools";
 import type { ToolDefinition } from "../tools/toolSchemas";
 import type { AgentObservation, AgentState } from "./agentState";
@@ -149,6 +153,12 @@ function toItems(data: unknown): Record<string, unknown>[] {
     for (const key of [
       "items",
       "articles",
+      "alerts",
+      "fraud_alerts",
+      "atm_operations",
+      "operations",
+      "authorizations",
+      "holds",
       "subscriptions",
       "transactions",
       "results",
@@ -176,9 +186,11 @@ function toItems(data: unknown): Record<string, unknown>[] {
  *   Each article is first checked by the KB safety guard; poisoned articles
  *   are blocked and recorded as policy_blocked observations instead.
  *
- * • getTransactions → getTransactionById for every declined transaction.
- *   Ensures the full (whitelist-filtered) transaction record is in context,
- *   not just the minimal fields returned by the list endpoint.
+ * • getTransactions → getTransactionById for each anomalous transaction:
+ *   declined (auth / limit failures) OR settled card_purchase (posted /
+ *   completed) — the two categories most commonly subject to support cases.
+ *   Ensures the full (whitelist-filtered) record is in context before any
+ *   high-risk action reaches PolicyGuard.
  *
  * • getCustomerProfile → getSubscriptionById for every inactive subscription.
  *   Surfaces activation_error and provider details before the Reason step.
@@ -186,6 +198,25 @@ function toItems(data: unknown): Record<string, unknown>[] {
  * • getUserLimits → searchKnowledgeBase("превышение дневного лимита карты")
  *   when no kb_* evidence exists yet. Immediately chains into the
  *   searchKnowledgeBase trigger so each found article is opened in the same pass.
+ *
+ * • getUserFraudAlerts → searchKnowledgeBase("unauthorized purchase fraud dispute")
+ *   when alerts were returned AND no kb_* evidence exists yet. Chains into the
+ *   searchKnowledgeBase trigger so each article is opened in the same pass.
+ *
+ * • getUserHolds → for each hold with a transaction_id:
+ *     1. getTransactionById   — full whitelisted transaction record.
+ *     2. getTransactionAuthorizations — authorization chain for that transaction.
+ *
+ * • getUserAtmOperations → four chained follow-ups (all in a single pass):
+ *     1. getAtmById        — for every op with an atm_id (address + status).
+ *     2. getTransactionById — for every op with a transaction_id not yet in evidence
+ *        (full whitelisted record, prompt-injection fields stripped).
+ *     2b. getTransactions  — fallback fired once when at least one op has no
+ *        transaction_id and no "transactions" observation exists yet; loads the
+ *        full list so GigaChat can match the ATM op by amount and date.
+ *     3. searchKnowledgeBase("atm cash not dispensed reversal") — once, when no
+ *        kb_* evidence exists yet; chains into the searchKnowledgeBase trigger so
+ *        each found article is opened in the same pass.
  *
  * All results are committed via commitObservation so evidence deduplication
  * is handled identically to primary tool calls.
@@ -277,12 +308,37 @@ async function autoFollowUp(
     }
   }
 
-  // ── getTransactions → fetch each declined transaction ────────────────────
+  // ── getTransactions → fetch anomalous transactions ───────────────────────
+  //
+  // Two criteria trigger an eager getTransactionById follow-up:
+  //
+  //   1. status === "declined"
+  //      The transaction was rejected; the agent needs the full record (decline
+  //      reason, response code, limits) to investigate auth / limit issues.
+  //
+  //   2. kind === "card_purchase" AND status ∈ { "posted", "completed" }
+  //      A settled card purchase is the most common subject of support cases
+  //      (disputes, duplicate charges, unauthorized purchases).  Fetching it
+  //      eagerly ensures PolicyGuard has high-confidence transaction evidence
+  //      before evaluating any high-risk action — even when the LLM did not
+  //      emit a getTransactionById tool_call of its own.
+  //
+  // ATM withdrawals and holds are covered by their own dedicated follow-up
+  // triggers (getUserAtmOperations, getUserHolds) and are excluded here to
+  // prevent double-fetching.
   if (primaryToolName === "getTransactions") {
     const txns = toItems(data);
 
     for (const txn of txns) {
-      if (txn["status"] !== "declined") continue;
+      const status = txn["status"];
+      const kind   = txn["kind"];
+
+      const isDeclined        = status === "declined";
+      const isSettledPurchase =
+        kind === "card_purchase" &&
+        (status === "posted" || status === "completed");
+
+      if (!isDeclined && !isSettledPurchase) continue;
 
       const txnId =
         (typeof txn["id"] === "string" ? txn["id"] : "") ||
@@ -301,6 +357,7 @@ async function autoFollowUp(
         trigger: "getTransactions",
         followUp: "getTransactionById",
         transactionId: txnId,
+        reason: isDeclined ? "declined" : "settled_card_purchase",
       });
 
       try {
@@ -408,6 +465,433 @@ async function autoFollowUp(
           query,
           error: err instanceof Error ? err.message : String(err),
         });
+      }
+    }
+  }
+
+  // ── getUserAtmOperations → three chained follow-ups ─────────────────────
+  if (primaryToolName === "getUserAtmOperations") {
+    const ops = toItems(data);
+
+    // ── Sub-action 1: getAtmById for each op that has an atm_id ─────────
+    for (const op of ops) {
+      const atmId =
+        (typeof op["atm_id"] === "string" ? op["atm_id"] : "") ||
+        (typeof op["atmId"] === "string" ? op["atmId"] : "") ||
+        (typeof op["atm"] === "string" ? op["atm"] : "");
+      if (!atmId) continue;
+
+      // Skip if we already have an ATM detail observation for this ATM.
+      if (
+        state.observations.some(
+          (obs) => obs.type === "atm_detail" && obs.source.includes(atmId),
+        )
+      ) continue;
+
+      logEvent("info", "auto_follow_up", {
+        runId: state.runId,
+        trigger: "getUserAtmOperations",
+        followUp: "getAtmById",
+        atmId,
+      });
+
+      try {
+        const followObs = await getAtmByIdTool.execute({ atmId }, state);
+        commitObservation(
+          state,
+          getAtmByIdTool as unknown as ToolDefinition<unknown>,
+          { atmId },
+          followObs,
+        );
+      } catch (err) {
+        logEvent("warn", "auto_follow_up.error", {
+          runId: state.runId,
+          trigger: "getUserAtmOperations",
+          followUp: "getAtmById",
+          atmId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // ── Sub-action 2: getTransactionById for each op with transaction_id ──
+    //
+    // Fetches the full (prompt-injection-stripped) transaction record so
+    // PolicyGuard has high-confidence transaction evidence before allowing
+    // createReversal. Skip if a transaction_detail observation already exists
+    // for this id (deduplication mirrors the getTransactions trigger).
+    for (const op of ops) {
+      const txnId =
+        (typeof op["transaction_id"] === "string" ? op["transaction_id"] : "") ||
+        (typeof op["txn_id"] === "string" ? op["txn_id"] : "");
+      if (!txnId) continue;
+
+      // Skip if we already have a detail observation for this transaction.
+      if (
+        state.observations.some(
+          (obs) => obs.type === "transaction_detail" && obs.source.includes(txnId),
+        )
+      ) continue;
+
+      logEvent("info", "auto_follow_up", {
+        runId: state.runId,
+        trigger: "getUserAtmOperations",
+        followUp: "getTransactionById",
+        transactionId: txnId,
+      });
+
+      try {
+        const followObs = await getTransactionByIdTool.execute(
+          { transactionId: txnId },
+          state,
+        );
+        commitObservation(
+          state,
+          getTransactionByIdTool as unknown as ToolDefinition<unknown>,
+          { transactionId: txnId },
+          followObs,
+        );
+      } catch (err) {
+        logEvent("warn", "auto_follow_up.error", {
+          runId: state.runId,
+          trigger: "getUserAtmOperations",
+          followUp: "getTransactionById",
+          transactionId: txnId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // ── Sub-action 2b: fallback getTransactions when ops have no transaction_id ─
+    //
+    // Some ATM operation records do not carry a direct transaction_id link.
+    // In that case we load the full transaction list so GigaChat can match the
+    // ATM operation to the correct transaction by amount and date on its next
+    // Reason step.  The fallback fires at most once per getUserAtmOperations
+    // call: only when at least one op lacks a transaction_id, no "transactions"
+    // observation exists yet, and state.customerId is already known.
+    const someOpHasNoTxnId = ops.some((op) => {
+      const txnId =
+        (typeof op["transaction_id"] === "string" ? op["transaction_id"] : "") ||
+        (typeof op["txn_id"] === "string" ? op["txn_id"] : "");
+      return !txnId;
+    });
+
+    if (someOpHasNoTxnId && state.customerId) {
+      const hasTransactionsObs = state.observations.some(
+        (obs) => obs.type === "transactions",
+      );
+
+      if (!hasTransactionsObs) {
+        const customerId = state.customerId;
+
+        logEvent("info", "auto_follow_up", {
+          runId: state.runId,
+          trigger: "getUserAtmOperations",
+          followUp: "getTransactions",
+          customerId,
+          reason: "atm_operation missing transaction_id — loading full list for LLM matching",
+        });
+
+        try {
+          const followObs = await getTransactionsTool.execute(
+            { customerId, limit: 50 },
+            state,
+          );
+          commitObservation(
+            state,
+            getTransactionsTool as unknown as ToolDefinition<unknown>,
+            { customerId, limit: 50 },
+            followObs,
+          );
+        } catch (err) {
+          logEvent("warn", "auto_follow_up.error", {
+            runId: state.runId,
+            trigger: "getUserAtmOperations",
+            followUp: "getTransactions",
+            customerId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    // ── Sub-action 3: searchKnowledgeBase for ATM cash / reversal articles ─
+    //
+    // Fires once per getUserAtmOperations call when no KB evidence exists yet.
+    // Chains into the searchKnowledgeBase trigger so each found article is
+    // opened immediately — same pattern as getUserLimits and getUserFraudAlerts.
+    const hasKbEvidenceAtm = state.evidence.some((ev) => ev.objectId.startsWith("kb_"));
+
+    if (!hasKbEvidenceAtm) {
+      const query = "atm cash not dispensed reversal";
+
+      logEvent("info", "auto_follow_up", {
+        runId: state.runId,
+        trigger: "getUserAtmOperations",
+        followUp: "searchKnowledgeBase",
+        query,
+      });
+
+      try {
+        const followObs = await searchKnowledgeBaseTool.execute({ query }, state);
+        commitObservation(
+          state,
+          searchKnowledgeBaseTool as unknown as ToolDefinition<unknown>,
+          { query },
+          followObs,
+        );
+        // Chain: open each found article in the same pass.
+        await autoFollowUp(state, "searchKnowledgeBase", followObs);
+      } catch (err) {
+        logEvent("warn", "auto_follow_up.error", {
+          runId: state.runId,
+          trigger: "getUserAtmOperations",
+          followUp: "searchKnowledgeBase",
+          query,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  // ── getUserHolds → fetch transaction + authorizations for each hold ────────
+  //
+  // For each hold that carries a transaction_id we eagerly fetch:
+  //   1. getTransactionById — provides high-confidence transaction evidence
+  //      required by PolicyGuard before createReversal.
+  //   2. getTransactionAuthorizations — surfaces the authorization chain so
+  //      the agent can verify whether the hold is legitimate or stale.
+  //
+  // Skip calls whose observation type is already present for the given id
+  // (mirrors the deduplication pattern of getTransactions and getUserAtmOperations).
+  if (primaryToolName === "getUserHolds") {
+    const holds = toItems(data);
+
+    for (const hold of holds) {
+      let txnId =
+        (typeof hold["transaction_id"] === "string" ? hold["transaction_id"] : "") ||
+        (typeof hold["txn_id"] === "string" ? hold["txn_id"] : "");
+
+      // ── Fallback: resolve txnId from already-loaded transactions ─────────────
+      //
+      // Some holds arrive without a transaction_id (e.g. restaurant pre-auth).
+      // In that case, scan observations of type "transactions" for a transaction
+      // whose status === "authorized" and amount matches the hold amount — this
+      // is the most reliable heuristic available without an extra API call.
+      // If found, eagerly fetch its full record via getTransactionById so it
+      // lands in evidence before PolicyGuard checks createReversal.
+      if (!txnId && typeof hold["amount"] === "number") {
+        const holdAmount = hold["amount"] as number;
+
+        for (const obs of state.observations) {
+          if (obs.type !== "transactions") continue;
+
+          // obs.data may be a bare array or a wrapped object — normalise it.
+          const txns: unknown[] = Array.isArray(obs.data)
+            ? obs.data
+            : toItems(obs.data);
+
+          const match = txns.find(
+            (t) =>
+              typeof t === "object" &&
+              t !== null &&
+              (t as Record<string, unknown>)["status"] === "authorized" &&
+              (t as Record<string, unknown>)["amount"] === holdAmount,
+          );
+
+          if (match) {
+            const candidateId = (match as Record<string, unknown>)["id"];
+            if (typeof candidateId === "string" && candidateId) {
+              txnId = candidateId;
+
+              logEvent("info", "auto_follow_up", {
+                runId: state.runId,
+                trigger: "getUserHolds",
+                followUp: "getTransactionById.fallback",
+                transactionId: txnId,
+                matchedByAmount: holdAmount,
+              });
+
+              try {
+                const followObs = await getTransactionByIdTool.execute(
+                  { transactionId: txnId },
+                  state,
+                );
+                commitObservation(
+                  state,
+                  getTransactionByIdTool as unknown as ToolDefinition<unknown>,
+                  { transactionId: txnId },
+                  followObs,
+                );
+              } catch (err) {
+                logEvent("warn", "auto_follow_up.error", {
+                  runId: state.runId,
+                  trigger: "getUserHolds",
+                  followUp: "getTransactionById.fallback",
+                  transactionId: txnId,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              }
+            }
+            break; // one match per hold is sufficient
+          }
+        }
+      }
+
+      if (!txnId) continue;
+
+      // ── 1. getTransactionById ─────────────────────────────────────────────
+      if (
+        !state.observations.some(
+          (obs) => obs.type === "transaction_detail" && obs.source.includes(txnId),
+        )
+      ) {
+        logEvent("info", "auto_follow_up", {
+          runId: state.runId,
+          trigger: "getUserHolds",
+          followUp: "getTransactionById",
+          transactionId: txnId,
+        });
+
+        try {
+          const followObs = await getTransactionByIdTool.execute(
+            { transactionId: txnId },
+            state,
+          );
+          commitObservation(
+            state,
+            getTransactionByIdTool as unknown as ToolDefinition<unknown>,
+            { transactionId: txnId },
+            followObs,
+          );
+        } catch (err) {
+          logEvent("warn", "auto_follow_up.error", {
+            runId: state.runId,
+            trigger: "getUserHolds",
+            followUp: "getTransactionById",
+            transactionId: txnId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      // ── 2. getTransactionAuthorizations ──────────────────────────────────
+      if (
+        !state.observations.some(
+          (obs) =>
+            obs.type === "transaction_authorizations" && obs.source.includes(txnId),
+        )
+      ) {
+        logEvent("info", "auto_follow_up", {
+          runId: state.runId,
+          trigger: "getUserHolds",
+          followUp: "getTransactionAuthorizations",
+          transactionId: txnId,
+        });
+
+        try {
+          const followObs = await getTransactionAuthorizationsTool.execute(
+            { transactionId: txnId },
+            state,
+          );
+          commitObservation(
+            state,
+            getTransactionAuthorizationsTool as unknown as ToolDefinition<unknown>,
+            { transactionId: txnId },
+            followObs,
+          );
+        } catch (err) {
+          logEvent("warn", "auto_follow_up.error", {
+            runId: state.runId,
+            trigger: "getUserHolds",
+            followUp: "getTransactionAuthorizations",
+            transactionId: txnId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    // ── 3. searchKnowledgeBase — hold reversal policy article ─────────────
+    //
+    // Fired once after the holds loop, not per hold — we only need one KB
+    // lookup regardless of how many holds were found.  Skip if KB evidence
+    // already exists from an earlier step.
+    if (!state.evidence.some((ev) => ev.objectId.startsWith("kb_"))) {
+      const query = "restaurant authorization hold pending capture";
+
+      logEvent("info", "auto_follow_up", {
+        runId: state.runId,
+        trigger: "getUserHolds",
+        followUp: "searchKnowledgeBase",
+        query,
+      });
+
+      try {
+        const followObs = await searchKnowledgeBaseTool.execute({ query }, state);
+        commitObservation(
+          state,
+          searchKnowledgeBaseTool as unknown as ToolDefinition<unknown>,
+          { query },
+          followObs,
+        );
+        // Chain: open each article returned by the search in the same pass.
+        await autoFollowUp(state, "searchKnowledgeBase", followObs);
+      } catch (err) {
+        logEvent("warn", "auto_follow_up.error", {
+          runId: state.runId,
+          trigger: "getUserHolds",
+          followUp: "searchKnowledgeBase",
+          query,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  // ── getUserFraudAlerts → search KB for fraud/dispute articles ─────────────
+  //
+  // Fires only when fraud alerts were actually returned (alerts.length > 0)
+  // and no KB evidence exists yet — mirrors the getUserLimits → KB pattern.
+  // Chains into the searchKnowledgeBase trigger so each found article is
+  // immediately fetched and opened in the same pass.
+  if (primaryToolName === "getUserFraudAlerts") {
+    const alerts = toItems(data);
+
+    if (alerts.length > 0) {
+      const hasKbEvidence = state.evidence.some((ev) => ev.objectId.startsWith("kb_"));
+
+      if (!hasKbEvidence) {
+        const query = "unauthorized purchase fraud dispute";
+
+        logEvent("info", "auto_follow_up", {
+          runId: state.runId,
+          trigger: "getUserFraudAlerts",
+          followUp: "searchKnowledgeBase",
+          query,
+          alertCount: alerts.length,
+        });
+
+        try {
+          const followObs = await searchKnowledgeBaseTool.execute({ query }, state);
+          commitObservation(
+            state,
+            searchKnowledgeBaseTool as unknown as ToolDefinition<unknown>,
+            { query },
+            followObs,
+          );
+          // Chain: open each article found by the search in the same pass.
+          await autoFollowUp(state, "searchKnowledgeBase", followObs);
+        } catch (err) {
+          logEvent("warn", "auto_follow_up.error", {
+            runId: state.runId,
+            trigger: "getUserFraudAlerts",
+            followUp: "searchKnowledgeBase",
+            query,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
   }

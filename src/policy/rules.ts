@@ -1,6 +1,6 @@
 import type { AgentAction } from "../agent/agentState";
 import type { Evidence } from "../evidence/evidenceTypes";
-import type { RefundTransactionArgs } from "../tools/toolSchemas";
+import type { RefundTransactionArgs, CreateDisputeArgs, CreateReversalArgs } from "../tools/toolSchemas";
 
 export type PolicyBlockCode =
   | "NO_EVIDENCE"
@@ -153,5 +153,135 @@ export function canRefundTransaction(input: RefundPolicyInput): PolicyDecision {
   return {
     allowed: true,
     reason: "Refund is allowed by policy and supported by evidence.",
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Dispute policy
+// ─────────────────────────────────────────────────────────────
+
+export interface CreateDisputePolicyInput {
+  args: CreateDisputeArgs;
+  evidence: Evidence[];
+}
+
+/**
+ * Validates whether a createDispute action is permitted by business policy.
+ *
+ * Two independent evidence requirements must BOTH be satisfied:
+ *
+ *   1. Transaction evidence — at least one high-confidence item whose objectId
+ *      matches the target transactionId. Proves the transaction was individually
+ *      inspected via getTransactionById, not merely listed.
+ *
+ *   2. Fraud alert evidence — at least one item whose objectId starts with
+ *      "fraud_". Proves getUserFraudAlerts was called and a fraud signal exists
+ *      that justifies opening a dispute.
+ */
+export function canCreateDispute(input: CreateDisputePolicyInput): PolicyDecision {
+  const { args, evidence } = input;
+
+  // ── Requirement 1: high-confidence transaction evidence ───────────────────
+  const transactionEvidence = evidence.filter(
+    (item) => item.objectId === args.transactionId && item.confidence === "high",
+  );
+
+  if (transactionEvidence.length === 0) {
+    return {
+      allowed: false,
+      code: "NO_EVIDENCE",
+      reason: `No high-confidence evidence found for transaction ${args.transactionId}. Call getTransactionById first.`,
+    };
+  }
+
+  // ── Requirement 2: fraud alert evidence ──────────────────────────────────
+  const fraudAlertEvidence = evidence.filter((item) =>
+    item.objectId.startsWith("fraud_"),
+  );
+
+  if (fraudAlertEvidence.length === 0) {
+    return {
+      allowed: false,
+      code: "INSUFFICIENT_EVIDENCE",
+      reason:
+        "Dispute requires at least one fraud alert as evidence. Call getUserFraudAlerts first.",
+    };
+  }
+
+  return {
+    allowed: true,
+    reason:
+      "Dispute is allowed: high-confidence transaction evidence and fraud alert evidence are present.",
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reversal policy
+// ─────────────────────────────────────────────────────────────
+
+export interface CreateReversalPolicyInput {
+  args: CreateReversalArgs;
+  evidence: Evidence[];
+}
+
+/**
+ * Validates whether a createReversal action is permitted by business policy.
+ *
+ * Two independent evidence requirements must BOTH be satisfied:
+ *
+ *   1. Transaction evidence — at least one high-confidence item whose objectId
+ *      matches the target transactionId. Proves the transaction was individually
+ *      inspected via getTransactionById, not merely referenced in a list.
+ *
+ *   2. Operational evidence — at least one item whose objectId starts with one
+ *      of the following prefixes, covering the three supported reversal paths:
+ *        • "atmop_"  — ATM operation (getUserAtmOperations)
+ *        • "hold_"   — authorization hold (getUserHolds)
+ *        • "auth_"   — authorization record (getTransactionAuthorizations)
+ *      Any single matching item satisfies this requirement.
+ */
+export function canCreateReversal(input: CreateReversalPolicyInput): PolicyDecision {
+  const { args, evidence } = input;
+
+  // ── Requirement 1: high-confidence transaction evidence ───────────────────
+  const transactionEvidence = evidence.filter(
+    (item) => item.objectId === args.transactionId && item.confidence === "high",
+  );
+
+  if (transactionEvidence.length === 0) {
+    return {
+      allowed: false,
+      code: "NO_EVIDENCE",
+      reason: `No high-confidence evidence found for transaction ${args.transactionId}. Call getTransactionById first.`,
+    };
+  }
+
+  // ── Requirement 2: ATM operation, hold, or authorization evidence ─────────
+  //
+  // Covers three reversal paths:
+  //   ATM cash not dispensed → getUserAtmOperations (atmop_*)
+  //   Authorization hold dispute → getUserHolds (hold_*) or
+  //                                 getTransactionAuthorizations (auth_*)
+  const operationalEvidence = evidence.filter(
+    (item) =>
+      item.objectId.startsWith("atmop_") ||
+      item.objectId.startsWith("hold_") ||
+      item.objectId.startsWith("auth_"),
+  );
+
+  if (operationalEvidence.length === 0) {
+    return {
+      allowed: false,
+      code: "INSUFFICIENT_EVIDENCE",
+      reason:
+        "Reversal requires at least one ATM operation (atmop_*), hold (hold_*), or authorization (auth_*) as evidence. " +
+        "Call getUserAtmOperations, getUserHolds, or getTransactionAuthorizations first.",
+    };
+  }
+
+  return {
+    allowed: true,
+    reason:
+      "Reversal is allowed: high-confidence transaction evidence and operational evidence (ATM operation / hold / authorization) are present.",
   };
 }

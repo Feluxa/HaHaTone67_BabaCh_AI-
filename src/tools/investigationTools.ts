@@ -18,6 +18,16 @@ import {
   GetKnowledgeBaseArticleArgsSchema,
   type GetUserLimitsArgs,
   GetUserLimitsArgsSchema,
+  type GetUserFraudAlertsArgs,
+  GetUserFraudAlertsArgsSchema,
+  type GetUserAtmOperationsArgs,
+  GetUserAtmOperationsArgsSchema,
+  type GetAtmByIdArgs,
+  GetAtmByIdArgsSchema,
+  type GetTransactionAuthorizationsArgs,
+  GetTransactionAuthorizationsArgsSchema,
+  type GetUserHoldsArgs,
+  GetUserHoldsArgsSchema,
   type ToolDefinition,
 } from "./toolSchemas";
 
@@ -321,6 +331,159 @@ export const getUserLimitsTool: ToolDefinition<GetUserLimitsArgs> = {
   },
 };
 
+/**
+ * Fetches fraud alerts for a customer (GET /users/{user_id}/fraud-alerts).
+ *
+ * Used when investigating unauthorized or disputed purchases. Each alert
+ * carries the fraud type, linked transaction ID, and current status.
+ * Results are low-risk read-only data and feed directly into evidence
+ * that is required before `createDispute` can be called.
+ */
+export const getUserFraudAlertsTool: ToolDefinition<GetUserFraudAlertsArgs> = {
+  name: "getUserFraudAlerts",
+  description:
+    "Load fraud alerts for a customer from the bank sandbox via GET /users/{user_id}/fraud-alerts. Call when investigating unauthorized transactions before creating a dispute.",
+  riskLevel: "low",
+  requiresEvidence: false,
+  requiresPolicyCheck: false,
+  inputSchema: GetUserFraudAlertsArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(
+      `/users/${args.userId}/fraud-alerts`,
+      { runId: state.runId },
+    );
+
+    return {
+      type: "fraud_alerts",
+      source: `GET /users/${args.userId}/fraud-alerts`,
+      status: "success",
+      data,
+    };
+  },
+};
+
+/**
+ * Fetches ATM operations for a customer (GET /users/{user_id}/atm-operations).
+ *
+ * Used when investigating ATM-related issues (cash not dispensed, reversal
+ * required). Each operation carries amount, currency, status and the ATM ID,
+ * which drives the subsequent auto-follow-up getAtmById call.
+ */
+export const getUserAtmOperationsTool: ToolDefinition<GetUserAtmOperationsArgs> = {
+  name: "getUserAtmOperations",
+  description:
+    "Load ATM operations for a customer from the bank sandbox via GET /users/{user_id}/atm-operations. Call when investigating ATM cash issues before creating a reversal.",
+  riskLevel: "low",
+  requiresEvidence: false,
+  requiresPolicyCheck: false,
+  inputSchema: GetUserAtmOperationsArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(
+      `/users/${args.userId}/atm-operations`,
+      { runId: state.runId },
+    );
+
+    return {
+      type: "atm_operations",
+      source: `GET /users/${args.userId}/atm-operations`,
+      status: "success",
+      data,
+    };
+  },
+};
+
+/**
+ * Fetches a single ATM by its ID (GET /atms/{atm_id}).
+ *
+ * Returns ATM location address and operational status. Called automatically
+ * by autoFollowUp after getUserAtmOperations — provides the physical context
+ * for each ATM operation before the agent reasons about a reversal.
+ */
+export const getAtmByIdTool: ToolDefinition<GetAtmByIdArgs> = {
+  name: "getAtmById",
+  description:
+    "Load ATM details by ID from the bank sandbox via GET /atms/{atm_id}. Returns address and operational status of the ATM.",
+  riskLevel: "low",
+  requiresEvidence: false,
+  requiresPolicyCheck: false,
+  inputSchema: GetAtmByIdArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(
+      `/atms/${args.atmId}`,
+      { runId: state.runId },
+    );
+
+    return {
+      type: "atm_detail",
+      source: `GET /atms/${args.atmId}`,
+      status: "success",
+      data,
+    };
+  },
+};
+
+/**
+ * Fetches authorization records for a transaction
+ * (GET /transactions/{transactionId}/authorizations).
+ *
+ * Returns the list of authorization attempts linked to a transaction, each
+ * carrying amount, currency, status and merchant name. Called automatically
+ * by autoFollowUp after getUserHolds — provides the authorization chain needed
+ * to understand hold disputes before createReversal.
+ */
+export const getTransactionAuthorizationsTool: ToolDefinition<GetTransactionAuthorizationsArgs> = {
+  name: "getTransactionAuthorizations",
+  description:
+    "Load authorization records for a transaction from the bank sandbox via GET /transactions/{transactionId}/authorizations. Call when investigating authorization holds.",
+  riskLevel: "low",
+  requiresEvidence: false,
+  requiresPolicyCheck: false,
+  inputSchema: GetTransactionAuthorizationsArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(
+      `/transactions/${args.transactionId}/authorizations`,
+      { runId: state.runId },
+    );
+
+    return {
+      type: "transaction_authorizations",
+      source: `GET /transactions/${args.transactionId}/authorizations`,
+      status: "success",
+      data,
+    };
+  },
+};
+
+/**
+ * Fetches active holds for a customer (GET /users/{userId}/holds).
+ *
+ * Returns authorization holds that have not yet settled, each linked to a
+ * transaction ID. Drives the autoFollowUp chain: getTransactionById +
+ * getTransactionAuthorizations for each hold before createReversal is attempted.
+ */
+export const getUserHoldsTool: ToolDefinition<GetUserHoldsArgs> = {
+  name: "getUserHolds",
+  description:
+    "Load active authorization holds for a customer from the bank sandbox via GET /users/{userId}/holds. Call when investigating hold disputes before creating a reversal.",
+  riskLevel: "low",
+  requiresEvidence: false,
+  requiresPolicyCheck: false,
+  inputSchema: GetUserHoldsArgsSchema,
+  async execute(args, state) {
+    const data = await sandboxClient.get(
+      `/users/${args.userId}/holds`,
+      { runId: state.runId },
+    );
+
+    return {
+      type: "user_holds",
+      source: `GET /users/${args.userId}/holds`,
+      status: "success",
+      data,
+    };
+  },
+};
+
 export const investigationTools = [
   getTicketMessagesTool,
   getCustomerProfileTool,
@@ -331,4 +494,9 @@ export const investigationTools = [
   searchKnowledgeBaseTool,
   getKnowledgeBaseArticleTool,
   getUserLimitsTool,
+  getUserFraudAlertsTool,
+  getUserAtmOperationsTool,
+  getAtmByIdTool,
+  getTransactionAuthorizationsTool,
+  getUserHoldsTool,
 ];
