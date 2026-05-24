@@ -16,6 +16,9 @@ import {
   getUserIdentityDocumentsTool,
   getUserKycTool,
   getServiceOutagesTool,
+  getUserWebhooksTool,
+  getUserNotificationsTool,
+  getUserProductEnrollmentsTool,
 } from "../tools/investigationTools";
 import type { ToolDefinition } from "../tools/toolSchemas";
 import type { AgentObservation, AgentState } from "./agentState";
@@ -762,6 +765,126 @@ async function autoFollowUp(
           subscriptionId: subId,
           error: err instanceof Error ? err.message : String(err),
         });
+      }
+
+      const sourceTransactionId =
+        stringValue(sub, "source_transaction_id") ||
+        stringValue(sub, "transaction_id") ||
+        stringValue(sub, "txn_id");
+
+      if (
+        sourceTransactionId &&
+        !hasSuccessfulObservation(state, "transaction_detail", sourceTransactionId)
+      ) {
+        logEvent("info", "auto_follow_up", {
+          runId: state.runId,
+          trigger: "getCustomerProfile",
+          followUp: "getTransactionById",
+          transactionId: sourceTransactionId,
+        });
+
+        try {
+          const followObs = await getTransactionByIdTool.execute(
+            { transactionId: sourceTransactionId },
+            state,
+          );
+          commitObservation(
+            state,
+            getTransactionByIdTool as unknown as ToolDefinition<unknown>,
+            { transactionId: sourceTransactionId },
+            followObs,
+          );
+        } catch (err) {
+          logEvent("warn", "auto_follow_up.error", {
+            runId: state.runId,
+            trigger: "getCustomerProfile",
+            followUp: "getTransactionById",
+            transactionId: sourceTransactionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (state.customerId) {
+        const userId = state.customerId;
+        const requiredSubscriptionTools: Array<{
+          type: string;
+          name: string;
+          tool: ToolDefinition<unknown>;
+          args: unknown;
+        }> = [
+          {
+            type: "user_webhooks",
+            name: "getUserWebhooks",
+            tool: getUserWebhooksTool as unknown as ToolDefinition<unknown>,
+            args: { userId },
+          },
+          {
+            type: "user_product_enrollments",
+            name: "getUserProductEnrollments",
+            tool: getUserProductEnrollmentsTool as unknown as ToolDefinition<unknown>,
+            args: { userId },
+          },
+          {
+            type: "user_notifications",
+            name: "getUserNotifications",
+            tool: getUserNotificationsTool as unknown as ToolDefinition<unknown>,
+            args: { userId },
+          },
+        ];
+
+        for (const item of requiredSubscriptionTools) {
+          if (hasSuccessfulObservation(state, item.type)) continue;
+
+          logEvent("info", "auto_follow_up", {
+            runId: state.runId,
+            trigger: "getCustomerProfile",
+            followUp: item.name,
+          });
+
+          try {
+            const followObs = await item.tool.execute(item.args, state);
+            commitObservation(state, item.tool, item.args, followObs);
+          } catch (err) {
+            logEvent("warn", "auto_follow_up.error", {
+              runId: state.runId,
+              trigger: "getCustomerProfile",
+              followUp: item.name,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
+
+      const query = "subscription webhook activation";
+      const hasSubscriptionKb = state.evidence.some((ev) => ev.objectId === "kb_q7m4n2");
+
+      if (!hasSubscriptionKb) {
+        logEvent("info", "auto_follow_up", {
+          runId: state.runId,
+          trigger: "getCustomerProfile",
+          followUp: "searchKnowledgeBase",
+          query,
+        });
+
+        try {
+          const followObs = await searchKnowledgeBaseTool.execute({ query }, state);
+          commitObservation(
+            state,
+            searchKnowledgeBaseTool as unknown as ToolDefinition<unknown>,
+            { query },
+            followObs,
+          );
+          await autoFollowUp(state, "searchKnowledgeBase", followObs);
+        } catch (err) {
+          logEvent("warn", "auto_follow_up.error", {
+            runId: state.runId,
+            trigger: "getCustomerProfile",
+            followUp: "searchKnowledgeBase",
+            query,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
   }

@@ -117,12 +117,12 @@ export const getUserTransfersTool: ToolDefinition<GetUserTransfersArgs> = {
 
 export const getUserWebhooksTool: ToolDefinition<GetUserWebhooksArgs> = {
   name: "getUserWebhooks",
-  description: "Получить историю вебхуков клиента (GET /users/{userId}/webhooks).",
+  description: "Получить webhook-события по подпискам, платежам и уведомлениям (GET /webhooks).",
   riskLevel: "low", requiresEvidence: false, requiresPolicyCheck: false,
   inputSchema: GetUserWebhooksArgsSchema,
   async execute(args, state) {
-    const data = await sandboxClient.get(`/users/${args.userId}/webhooks`, { runId: state.runId, casePassword: state.casePassword });
-    return { type: "user_webhooks", source: `GET /users/${args.userId}/webhooks`, status: "success", data };
+    const data = await sandboxClient.get(`/webhooks`, { runId: state.runId, casePassword: state.casePassword });
+    return { type: "user_webhooks", source: `GET /webhooks`, status: "success", data };
   }
 };
 

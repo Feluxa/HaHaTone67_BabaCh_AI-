@@ -185,7 +185,7 @@ export function extractFromObservation(input: {
       break;
     }
 
-    case "user_webhooks": {
+    case "getUserWebhooks": {
       const items = toArray(data);
       for (const item of items) {
         const id = str(item, "id") || str(item, "webhook_id");
@@ -193,7 +193,7 @@ export function extractFromObservation(input: {
       }
       break;
     }
-    case "user_notifications": {
+    case "getUserNotifications": {
       const items = toArray(data);
       for (const item of items) {
         const id = str(item, "id") || str(item, "notification_id");
@@ -201,7 +201,7 @@ export function extractFromObservation(input: {
       }
       break;
     }
-    case "user_product_enrollments": {
+    case "getUserProductEnrollments": {
       const items = toArray(data);
       for (const item of items) {
         const id = str(item, "id") || str(item, "enrollment_id");
